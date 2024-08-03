@@ -1,0 +1,8 @@
+[project]
+name = "pictoria"
+version = "0.1.0"
+description = "Your Personal Image Gallery"
+authors = [{ name = "Jannchie", email = "jannchie@gmail.com" }]
+
+[tool.black]
+line-length = 120
