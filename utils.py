@@ -430,7 +430,7 @@ def attach_tags_to_post(session, post: Post, resp: wdtagger.Result, is_auto=Fals
     for tag_group_name in group_names:
         tag_group = session.query(TagGroup).filter(TagGroup.name == tag_group_name).first()
         if tag_group is None:
-            tag_group = TagGroup(name=tag_group_name)
+            tag_group = TagGroup(name=tag_group_name, color=colors[tag_group_name])
             session.add(tag_group)
 
     for i, tags in enumerate([resp.general_tags, resp.character_tags]):
