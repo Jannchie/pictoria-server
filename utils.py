@@ -403,7 +403,6 @@ def from_rating_to_int(rating):
     3: questionable
     4: explicit
     """
-    print(rating)
     if rating == "general":
         return 1
     elif rating == "sensitive":

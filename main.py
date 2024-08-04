@@ -6,7 +6,7 @@ from typing import Annotated, Optional
 
 import fastapi
 import uvicorn
-from fastapi import File, Form, HTTPException, Path, UploadFile
+from fastapi import File, Form, HTTPException, Path, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -17,7 +17,7 @@ from starlette.convertors import Convertor, register_url_convertor
 from wdtagger import Tagger
 
 import shared
-from models import Post, PostHasTag, PostPublic, Tag
+from models import Post, PostHasTag, PostPublic, Tag, TagPublic
 from utils import (
     attach_tags_to_post,
     execute_database_migration,
@@ -114,13 +114,14 @@ class RatingCountResponse(BaseModel):
 
 
 @app.get("/v1/posts/count/rating", response_model=list[RatingCountResponse])
-def v1_count_group_by_rating():
+def v1_count_group_by_rating(path: Optional[str] = Query(None)):
     session = get_session()
-    query_result = session.query(Post.rating, func.count()).group_by(Post.rating).all()
+    query = session.query(Post.rating, func.count()).group_by(Post.rating)
+    if path:
+        query = query.filter(Post.file_path.startswith(path))
+    resp = query.all()
     # Transform the query result into a list of RatingCountResponse instances
-    response_data = [
-        RatingCountResponse(rating=row[0] if row[0] is not None else 0, count=row[1]) for row in query_result
-    ]
+    response_data = [RatingCountResponse(rating=row[0] if row[0] is not None else 0, count=row[1]) for row in resp]
     return response_data
 
 
@@ -130,12 +131,13 @@ class ScoreCountResponse(BaseModel):
 
 
 @app.get("/v1/posts/count/score", response_model=list[ScoreCountResponse])
-def v1_count_group_by_score():
+def v1_count_group_by_score(path: Optional[str] = Query(None)):
     session = get_session()
-    query_result = session.query(Post.score, func.count()).group_by(Post.score).all()
-    response_data = [
-        ScoreCountResponse(score=row[0] if row[0] is not None else 0, count=row[1]) for row in query_result
-    ]
+    query = session.query(Post.score, func.count()).group_by(Post.score)
+    if path:
+        query = query.filter(Post.file_path.startswith(path))
+    resp = query.all()
+    response_data = [ScoreCountResponse(score=row[0] if row[0] is not None else 0, count=row[1]) for row in resp]
     return response_data
 
 
@@ -188,11 +190,23 @@ def v1_get_thumbnail(post_path: str):
     return fastapi.responses.FileResponse(abs_path)
 
 
-@app.get("/v1/tags")
+class TagResponse(BaseModel):
+    count: int
+    tag_info: TagPublic
+
+
+@app.get("/v1/tags", response_model=list[TagResponse])
 def v1_get_tags():
     session = get_session()
-    tags = session.query(Tag).all()
-    return tags
+    # 从 PostHasTag 表中查询所有的 tag_name 和 count，从 Tag 表中查询 tag_name 对应的 Tag 实例
+    query = (
+        session.query(PostHasTag.tag_name, func.count())
+        .group_by(PostHasTag.tag_name)
+        .join(Tag, PostHasTag.tag_name == Tag.name)
+    )
+    resp = query.all()
+    response_data = [TagResponse(count=row[1], tag_info=TagPublic(name=row[0])) for row in resp]
+    return response_data
 
 
 @app.post("/v1/tag/{tag_name}")
@@ -276,7 +290,7 @@ def v1_cmd_auto_tags(post_id: int):
 
     abs_path = post.absolute_path
     if shared.tagger is None:
-        shared.tagger = Tagger(slient=True)
+        shared.tagger = Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3", slient=True)
     resp = shared.tagger.tag(abs_path)
     post.rating = from_rating_to_int(resp.rating)
     all_tags = resp.all_tags
