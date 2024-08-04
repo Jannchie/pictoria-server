@@ -6,7 +6,7 @@ from typing import Annotated, Optional
 
 import fastapi
 import uvicorn
-from fastapi import File, Form, HTTPException, Path, Query, UploadFile
+from fastapi import Body, File, Form, HTTPException, Path, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -85,7 +85,11 @@ def v1_get_posts(
 ):
 
     session = get_session()
-    query = session.query(Post)
+    query = apply_filtered_query(filter, session.query(Post))
+    return query.limit(limit).offset(offset).all()
+
+
+def apply_filtered_query(filter, query):
     if filter.rating:
         query = query.filter(Post.rating.in_(filter.rating))
     if filter.score:
@@ -94,7 +98,7 @@ def v1_get_posts(
         query = query.join(Post.tags).filter(PostHasTag.tag_name.in_(filter.tags))
     if filter.folder and filter.folder != "." and filter.folder != "":
         query = query.filter(Post.file_path.startswith(filter.folder))
-    return query.limit(limit).offset(offset).all()
+    return query
 
 
 class PostCountResponse(BaseModel):
@@ -113,12 +117,14 @@ class RatingCountResponse(BaseModel):
     count: int
 
 
-@app.get("/v1/posts/count/rating", response_model=list[RatingCountResponse])
-def v1_count_group_by_rating(path: Optional[str] = Query(None)):
+@app.post("/v1/posts/count/rating", response_model=list[RatingCountResponse])
+def v1_count_group_by_rating(
+    filter: PostFilter = Body(...),
+):
+
     session = get_session()
     query = session.query(Post.rating, func.count()).group_by(Post.rating)
-    if path:
-        query = query.filter(Post.file_path.startswith(path))
+    query = apply_filtered_query(filter, query)
     resp = query.all()
     # Transform the query result into a list of RatingCountResponse instances
     response_data = [RatingCountResponse(rating=row[0] if row[0] is not None else 0, count=row[1]) for row in resp]
@@ -130,12 +136,13 @@ class ScoreCountResponse(BaseModel):
     count: int
 
 
-@app.get("/v1/posts/count/score", response_model=list[ScoreCountResponse])
-def v1_count_group_by_score(path: Optional[str] = Query(None)):
+@app.post("/v1/posts/count/score", response_model=list[ScoreCountResponse])
+def v1_count_group_by_score(
+    filter: PostFilter = Body(...),
+):
     session = get_session()
     query = session.query(Post.score, func.count()).group_by(Post.score)
-    if path:
-        query = query.filter(Post.file_path.startswith(path))
+    query = apply_filtered_query(filter, query)
     resp = query.all()
     response_data = [ScoreCountResponse(score=row[0] if row[0] is not None else 0, count=row[1]) for row in resp]
     return response_data

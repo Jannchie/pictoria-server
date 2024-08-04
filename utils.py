@@ -117,7 +117,10 @@ def remove_deleted_files(session, *, os_tuples_set, db_tuples_set):
 
 def delete_by_file_path_and_ext(session, file_path_and_ext):
     session.query(Post).filter(Post.file_path == file_path_and_ext[0], Post.extension == file_path_and_ext[1]).delete()
-    relative_path = Path(file_path_and_ext[0]).with_suffix(f".{file_path_and_ext[1]}")
+    if file_path_and_ext[1]:
+        relative_path = Path(file_path_and_ext[0]).with_suffix(f".{file_path_and_ext[1]}")
+    else:
+        relative_path = Path(file_path_and_ext[0])
     thumbnails_path = shared.thumbnails_dir / relative_path
     if thumbnails_path.exists():
         os.remove(thumbnails_path)
