@@ -1,6 +1,8 @@
 import os
+import pathlib
 import shutil
-from typing import Annotated, ForwardRef, List, TypeVar, Union
+import tomllib
+from typing import Annotated, Optional
 
 import fastapi
 import uvicorn
@@ -28,6 +30,8 @@ from utils import (
     use_route_names_as_operation_ids,
     watch_target_dir,
 )
+
+pyproject = tomllib.load(open("pyproject.toml", "rb"))
 
 console = get_console()
 app = fastapi.FastAPI()
@@ -67,9 +71,10 @@ def get_post_by_id(post_id, session):
 
 
 class PostFilter(BaseModel):
-    rating: list[int] = []
-    score: list[int] = []
-    tags: list[str] = []
+    rating: Optional[list[int]] = []
+    score: Optional[list[int]] = []
+    tags: Optional[list[str]] = []
+    folder: Optional[str]
 
 
 @app.post("/v1/posts", response_model=list[Post])
@@ -87,8 +92,9 @@ def v1_get_posts(
         query = query.filter(Post.score.in_(filter.score))
     if filter.tags:
         query = query.join(Post.tags).filter(PostHasTag.tag_name.in_(filter.tags))
-    posts = query.limit(limit).offset(offset).all()
-    return posts
+    if filter.folder and filter.folder != "." and filter.folder != "":
+        query = query.filter(Post.file_path.startswith(filter.folder))
+    return query.limit(limit).offset(offset).all()
 
 
 class PostCountResponse(BaseModel):
@@ -303,14 +309,19 @@ class DirectorySummary(BaseModel):
     name: str
     path: str
     file_count: int
-    children: List["DirectorySummary"] = Field(default_factory=list)
+    children: list["DirectorySummary"] = Field(default_factory=list)
 
 
 DirectorySummary.update_forward_refs()
 
 
 def get_directory_summary(path: str) -> DirectorySummary:
-    summary = DirectorySummary(name=os.path.basename(path), path=path, file_count=0, children=[])
+    summary = DirectorySummary(
+        name=os.path.basename(path),
+        path=str(pathlib.Path(path).relative_to(shared.target_dir)),
+        file_count=0,
+        children=[],
+    )
 
     ignore_dirs = shared.pictoria_dir
     with os.scandir(path) as entries:
@@ -339,13 +350,23 @@ def v1_get_folders():
     return directory_summary
 
 
-@app.post("/upload")
-async def upload_file(file: UploadFile = File(...), path: str = Form(...)):
+@app.post("/v1/upload")
+async def v1_upload_file(file: UploadFile = File(...), path: str = Form(...)):
     file_location = shared.target_dir / path
     file_location.parent.mkdir(parents=True, exist_ok=True)
     with open(file_location, "wb") as f:
         shutil.copyfileobj(file.file, f)
     return JSONResponse(content={"filename": path})
+
+
+@app.get("/")
+def root():
+    return {
+        "message": "Pictoria Server",
+        "version": pyproject["project"]["version"],
+        "description": pyproject["project"]["description"],
+        "author": pyproject["project"]["authors"],
+    }
 
 
 use_route_names_as_operation_ids(app)
