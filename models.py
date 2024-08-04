@@ -16,6 +16,7 @@ class TagGroup(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, sa_column=Column(Integer, primary_key=True, autoincrement=True))
     name: str = Field(nullable=False, index=True)
+    color: Optional[str] = Field(default=None)
 
     tags: List["Tag"] = Relationship(back_populates="group")
 
@@ -33,6 +34,7 @@ class Tag(TagBase, table=True):
 
 class TagPublic(TagBase):
     name: str
+    group_id: Optional[int]
 
 
 class Folder(SQLModel, table=True):

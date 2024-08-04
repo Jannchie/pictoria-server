@@ -17,7 +17,7 @@ from starlette.convertors import Convertor, register_url_convertor
 from wdtagger import Tagger
 
 import shared
-from models import Post, PostHasTag, PostPublic, Tag, TagPublic
+from models import Post, PostHasTag, PostPublic, Tag, TagGroup, TagPublic
 from utils import (
     attach_tags_to_post,
     execute_database_migration,
@@ -284,6 +284,13 @@ def v1_remove_tag_from_post(post_id: int, tag_name: str):
     return post
 
 
+@app.get("/v1/tag-groups", response_model=list[TagGroup])
+def v1_get_tag_groups():
+    session = get_session()
+    tag_groups = session.query(TagGroup).all()
+    return tag_groups
+
+
 @app.post("/v1/cmd/process-posts")
 def v1_cmd_process_posts():
     process_posts(True)
@@ -300,8 +307,7 @@ def v1_cmd_auto_tags(post_id: int):
         shared.tagger = Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3", slient=True)
     resp = shared.tagger.tag(abs_path)
     post.rating = from_rating_to_int(resp.rating)
-    all_tags = resp.all_tags
-    attach_tags_to_post(session, post, all_tags, is_auto=True)
+    attach_tags_to_post(session, post, resp, is_auto=True)
     session.commit()
 
     post = get_post_by_id(post_id, session)
