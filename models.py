@@ -14,7 +14,7 @@ SQLModel.metadata = Base.metadata
 class TagGroup(SQLModel, table=True):
     __tablename__ = "tag_groups"
 
-    id: Optional[int] = Field(default=None, sa_column=Column(Integer, primary_key=True, autoincrement=True))
+    id: int = Field(default=None, sa_column=Column(Integer, primary_key=True, autoincrement=True))
     name: str = Field(nullable=False, index=True)
     color: Optional[str] = Field(default=None)
 
@@ -28,7 +28,7 @@ class TagBase(SQLModel):
 class Tag(TagBase, table=True):
     __tablename__ = "tags"
     name: str = Field(primary_key=True)
-    group: Optional["TagGroup"] = Relationship(back_populates="tags")
+    group: Optional[TagGroup] = Relationship(back_populates="tags")
     group_id: Optional[int] = Field(default=None, foreign_key="tag_groups.id")
 
 

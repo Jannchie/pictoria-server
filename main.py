@@ -207,12 +207,15 @@ def v1_get_tags():
     session = get_session()
     # 从 PostHasTag 表中查询所有的 tag_name 和 count，从 Tag 表中查询 tag_name 对应的 Tag 实例
     query = (
-        session.query(PostHasTag.tag_name, func.count())
+        session.query(PostHasTag.tag_name, func.count(), Tag)
         .group_by(PostHasTag.tag_name)
         .join(Tag, PostHasTag.tag_name == Tag.name)
     )
     resp = query.all()
-    response_data = [TagResponse(count=row[1], tag_info=TagPublic(name=row[0])) for row in resp]
+    # Transform the query result into a list of TagResponse instances
+    response_data = [
+        TagResponse(count=row[1], tag_info=TagPublic(name=row[0], group_id=row[2].group_id)) for row in resp
+    ]
     return response_data
 
 
@@ -404,10 +407,12 @@ if __name__ == "__main__":
     execute_database_migration()
     sync_metadata()
     watch_target_dir()
-
+    host = args.host if args.host else "localhost"
+    doc_url = f"http://{host}:{args.port}/docs"
+    shared.logger.info(f"API Document: {doc_url}")
     uvicorn.run(
         "main:app",
-        host="127.0.0.1",
+        host=host,
         port=args.port,
         reload=args.reload,
         log_config=None,

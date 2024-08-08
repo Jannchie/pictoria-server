@@ -59,6 +59,7 @@ def migrate_db(db_path):
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reload", action="store_true")
+    parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--target_dir", type=str, default=".")
     args = parser.parse_args()
@@ -420,8 +421,7 @@ def from_rating_to_int(rating):
 
 
 def attach_tags_to_post(session, post: Post, resp: wdtagger.Result, is_auto=False):
-    tags = resp.general_tags
-    # 查看是否有名为 general 或者 character 的 TagGroup，如果没有则创建
+    # 统一查看是否有名为 general 或者 character 的 TagGroup，如果没有则创建
     group_names = ["general", "character"]
     colors = {
         "general": "#006192",
@@ -432,31 +432,37 @@ def attach_tags_to_post(session, post: Post, resp: wdtagger.Result, is_auto=Fals
         if tag_group is None:
             tag_group = TagGroup(name=tag_group_name, color=colors[tag_group_name])
             session.add(tag_group)
+            session.commit()  # 立即提交，以确保后续查询能找到新创建的 TagGroup
 
+    # 遍历标签并进行处理
     for i, tags in enumerate([resp.general_tags, resp.character_tags]):
         name = group_names[i]
-        tag_group: TagGroup = session.query(TagGroup).filter(TagGroup.name == name).first()
+        tag_group = session.query(TagGroup).filter(TagGroup.name == name).first()
         existing_tag_records = {
             tag_record.tag_name for tag_record in session.query(PostHasTag).filter(PostHasTag.tag_name.in_(tags)).all()
         }
         new_tags = set(tags) - existing_tag_records
 
-        # 如果既存的 tag 不属于任何 tag group，则将其放到对应 name 的 tag_group 中
+        # 如果已有的 tag 不属于任何 tag group，则将其放到相应的 tag_group 中
         for tag_name in existing_tag_records:
-            tag: Tag = session.query(Tag).filter(Tag.name == tag_name).first()
+            tag = session.query(Tag).filter(Tag.name == tag_name).first()
             if tag.group_id is None:
                 tag.group_id = tag_group.id
                 session.add(tag)
 
+        # 插入新标签，确保其唯一性
         for tag_name in new_tags:
-            new_tag = Tag(name=tag_name, group_id=tag_group.id)
-            session.add(new_tag)
+            existing_tag = session.query(Tag).filter(Tag.name == tag_name).first()
+            if existing_tag is None:
+                new_tag = Tag(name=tag_name, group_id=tag_group.id)
+                session.add(new_tag)
 
+        # 添加标签关联
         for tag_name in tags:
             if tag_name in existing_tag_records:
                 continue
-            postHasTag = PostHasTag(post_id=post.id, tag_name=tag_name, is_auto=is_auto)
-            session.add(postHasTag)
+            post_has_tag = PostHasTag(post_id=post.id, tag_name=tag_name, is_auto=is_auto)
+            session.add(post_has_tag)
 
     # 提交更改
     session.commit()
