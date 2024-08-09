@@ -60,7 +60,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reload", action="store_true")
     parser.add_argument("--host", type=str, default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=4777)
     parser.add_argument("--target_dir", type=str, default=".")
     args = parser.parse_args()
     return args
@@ -123,9 +123,12 @@ def delete_by_file_path_and_ext(session, file_path_and_ext):
         relative_path = Path(file_path_and_ext[0]).with_suffix(f".{file_path_and_ext[1]}")
     else:
         relative_path = Path(file_path_and_ext[0])
+    file_path = shared.target_dir / relative_path
     thumbnails_path = shared.thumbnails_dir / relative_path
     if thumbnails_path.exists():
         os.remove(thumbnails_path)
+    if file_path.exists():
+        os.remove(file_path)
 
 
 def add_new_files(session, *, os_tuples_set, db_tuples_set):

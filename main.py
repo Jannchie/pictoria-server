@@ -20,6 +20,7 @@ import shared
 from models import Post, PostHasTag, PostPublic, Tag, TagGroup, TagPublic
 from utils import (
     attach_tags_to_post,
+    delete_by_file_path_and_ext,
     execute_database_migration,
     from_rating_to_int,
     get_session,
@@ -87,6 +88,15 @@ def v1_get_posts(
     session = get_session()
     query = apply_filtered_query(filter, session.query(Post))
     return query.limit(limit).offset(offset).all()
+
+
+@app.delete("/v1/posts/{post_id}")
+def v1_delete_post(post_id: int):
+    session = get_session()
+    post = session.query(Post).filter(Post.id == post_id).first()
+    delete_by_file_path_and_ext(session=session, file_path_and_ext=[post.file_path, post.extension])
+    session.commit()
+    return post
 
 
 def apply_filtered_query(filter, query):
