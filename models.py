@@ -45,6 +45,7 @@ class Folder(SQLModel, table=True):
 
 
 class PostBase(SQLModel):
+    id: int = Field(sa_column=Column(Integer, primary_key=True, autoincrement=True, nullable=False))
     file_path: str = Field(index=True)
     extension: str = Field(index=True)
 
@@ -76,7 +77,6 @@ class Post(PostBase, table=True):
     __tablename__ = "posts"
     __table_args__ = (Index("idx_file_path_extension", "file_path", "extension", unique=True),)
 
-    id: Optional[int] = Field(default=None, sa_column=Column(Integer, primary_key=True, autoincrement=True))
     tags: List["PostHasTag"] = Relationship(back_populates="posts")
 
     @property
@@ -105,6 +105,5 @@ class PostHasTagPublic(SQLModel):
     tag_info: TagPublic
 
 
-class PostPublic(PostBase):
-    id: int
+class PostWithTag(PostBase):
     tags: List[PostHasTagPublic] = []

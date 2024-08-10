@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, Field
 from rich import get_console
+from rich.progress import track
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 from starlette.convertors import Convertor, register_url_convertor
@@ -19,7 +20,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from wdtagger import Tagger
 
 import shared
-from models import Post, PostBase, PostHasTag, PostPublic, Tag, TagGroup, TagPublic
+from models import Post, PostBase, PostHasTag, PostWithTag, Tag, TagGroup, TagPublic
 from utils import (
     attach_tags_to_post,
     delete_by_file_path_and_ext,
@@ -165,6 +166,22 @@ def v1_count_group_by_score(
     return [ScoreCountResponse(score=row[0] if row[0] is not None else 0, count=row[1]) for row in resp]
 
 
+class ExtensionCountResponse(BaseModel):
+    extension: str
+    count: int
+
+
+@app.post("/v1/posts/count/extension", response_model=list[ExtensionCountResponse])
+def v1_count_group_by_extension(
+    filter: PostFilter = Body(...),
+):
+    session = get_session()
+    query = session.query(Post.extension, func.count()).group_by(Post.extension)
+    query = apply_filtered_query(filter, query)
+    resp = query.all()
+    return [ExtensionCountResponse(extension=row[0], count=row[1]) for row in resp]
+
+
 class ScoreUpdate(BaseModel):
     score: Annotated[int, Field(ge=0, le=5)]
 
@@ -195,7 +212,7 @@ def v1_update_post_rating(post_id: Annotated[int, Path(gt=0)], rating_update: Ra
     return post
 
 
-@app.get("/v1/posts/{post_id}", response_model=PostPublic)
+@app.get("/v1/posts/{post_id}", response_model=PostWithTag)
 def v1_get_post(post_id: int):
     session = get_session()
     return get_post_by_id(post_id, session)
@@ -331,6 +348,24 @@ def v1_cmd_auto_tags(post_id: int):
 
     post = get_post_by_id(post_id, session)
     return post
+
+
+@app.get("/v1/cmd/auto-tags")
+def v1_cmd_auto_tags_all():
+    session = get_session()
+    posts = session.query(Post).all()
+    if shared.tagger is None:
+        shared.tagger = Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3", slient=True)
+
+    # 使用 rich 进度条
+    for post in track(posts, description="Processing posts..."):
+        abs_path = post.absolute_path
+        resp = shared.tagger.tag(abs_path)
+        post.rating = from_rating_to_int(resp.rating)
+        attach_tags_to_post(session, post, resp, is_auto=True)
+
+    session.commit()
+    return {"status": "ok"}
 
 
 class CountResponse(BaseModel):
