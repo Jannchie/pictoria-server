@@ -1,6 +1,7 @@
 import os
 import pathlib
 import shutil
+import time
 import tomllib
 from typing import Annotated, Optional
 
@@ -8,16 +9,17 @@ import fastapi
 import uvicorn
 from fastapi import Body, File, Form, HTTPException, Path, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, Field
 from rich import get_console
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 from starlette.convertors import Convertor, register_url_convertor
+from starlette.middleware.gzip import GZipMiddleware
 from wdtagger import Tagger
 
 import shared
-from models import Post, PostHasTag, PostPublic, Tag, TagGroup, TagPublic
+from models import Post, PostBase, PostHasTag, PostPublic, Tag, TagGroup, TagPublic
 from utils import (
     attach_tags_to_post,
     delete_by_file_path_and_ext,
@@ -35,7 +37,7 @@ from utils import (
 pyproject = tomllib.load(open("pyproject.toml", "rb"))
 
 console = get_console()
-app = fastapi.FastAPI()
+app = fastapi.FastAPI(default_response_class=ORJSONResponse, title="Pictoria", version=pyproject["project"]["version"])
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,6 +46,9 @@ app.add_middleware(
     allow_methods=["*"],  # 允许的 HTTP 方法，可以指定特定方法如 ["GET", "POST"]
     allow_headers=["*"],  # 允许的 HTTP 头，可以指定特定头如 ["Authorization", "Content-Type"]
 )
+
+# 启用 GZip 中间件
+app.add_middleware(GZipMiddleware, minimum_size=1000)  # minimum_size 表示最小压缩大小，单位为字节
 
 
 class PathConvertor(Convertor):
@@ -75,19 +80,22 @@ class PostFilter(BaseModel):
     rating: Optional[list[int]] = []
     score: Optional[list[int]] = []
     tags: Optional[list[str]] = []
+    extension: Optional[list[str]] = []
     folder: Optional[str]
 
 
-@app.post("/v1/posts", response_model=list[Post])
+@app.post(
+    "/v1/posts",
+    response_model=list[PostBase],
+)
 def v1_get_posts(
     limit: int | None = None,
     offset: int = 0,
     filter: PostFilter = PostFilter(),
 ):
-
     session = get_session()
-    query = apply_filtered_query(filter, session.query(Post))
-    return query.limit(limit).offset(offset).all()
+    query = apply_filtered_query(filter, session.query(Post)).limit(limit).offset(offset)
+    return query.all()
 
 
 @app.delete("/v1/posts/{post_id}")
@@ -99,13 +107,15 @@ def v1_delete_post(post_id: int):
     return post
 
 
-def apply_filtered_query(filter, query):
+def apply_filtered_query(filter: PostFilter, query: fastapi.Query):
     if filter.rating:
         query = query.filter(Post.rating.in_(filter.rating))
     if filter.score:
         query = query.filter(Post.score.in_(filter.score))
     if filter.tags:
         query = query.join(Post.tags).filter(PostHasTag.tag_name.in_(filter.tags))
+    if filter.extension:
+        query = query.filter(Post.extension.in_(filter.extension))
     if filter.folder and filter.folder != "." and filter.folder != "":
         query = query.filter(Post.file_path.startswith(filter.folder))
     return query
@@ -136,9 +146,7 @@ def v1_count_group_by_rating(
     query = session.query(Post.rating, func.count()).group_by(Post.rating)
     query = apply_filtered_query(filter, query)
     resp = query.all()
-    # Transform the query result into a list of RatingCountResponse instances
-    response_data = [RatingCountResponse(rating=row[0] if row[0] is not None else 0, count=row[1]) for row in resp]
-    return response_data
+    return [RatingCountResponse(rating=row[0] if row[0] is not None else 0, count=row[1]) for row in resp]
 
 
 class ScoreCountResponse(BaseModel):
@@ -154,8 +162,7 @@ def v1_count_group_by_score(
     query = session.query(Post.score, func.count()).group_by(Post.score)
     query = apply_filtered_query(filter, query)
     resp = query.all()
-    response_data = [ScoreCountResponse(score=row[0] if row[0] is not None else 0, count=row[1]) for row in resp]
-    return response_data
+    return [ScoreCountResponse(score=row[0] if row[0] is not None else 0, count=row[1]) for row in resp]
 
 
 class ScoreUpdate(BaseModel):
@@ -191,8 +198,7 @@ def v1_update_post_rating(post_id: Annotated[int, Path(gt=0)], rating_update: Ra
 @app.get("/v1/posts/{post_id}", response_model=PostPublic)
 def v1_get_post(post_id: int):
     session = get_session()
-    post = get_post_by_id(post_id, session)
-    return post
+    return get_post_by_id(post_id, session)
 
 
 @app.get("/v1/images/{post_path:pathlike}")
@@ -222,11 +228,13 @@ def v1_get_tags():
         .join(Tag, PostHasTag.tag_name == Tag.name)
     )
     resp = query.all()
-    # Transform the query result into a list of TagResponse instances
-    response_data = [
-        TagResponse(count=row[1], tag_info=TagPublic(name=row[0], group_id=row[2].group_id)) for row in resp
+    return [
+        TagResponse(
+            count=row[1],
+            tag_info=TagPublic(name=row[0], group_id=row[2].group_id),
+        )
+        for row in resp
     ]
-    return response_data
 
 
 @app.post("/v1/tag/{tag_name}")
@@ -250,8 +258,7 @@ def v1_delete_tag(tag_name: str):
 @app.get("/v1/tags/{tag_name}")
 def v1_get_tag(tag_name: str):
     session = get_session()
-    tag = session.query(Tag).filter(Tag.name == tag_name).first()
-    return tag
+    return session.query(Tag).filter(Tag.name == tag_name).first()
 
 
 @app.put("/v1/tags/{tag_name}")
@@ -300,8 +307,7 @@ def v1_remove_tag_from_post(post_id: int, tag_name: str):
 @app.get("/v1/tag-groups", response_model=list[TagGroup])
 def v1_get_tag_groups():
     session = get_session()
-    tag_groups = session.query(TagGroup).all()
-    return tag_groups
+    return session.query(TagGroup).all()
 
 
 @app.post("/v1/cmd/process-posts")
@@ -386,8 +392,7 @@ def v1_get_folders():
     if not os.path.isdir(target_path):
         raise HTTPException(status_code=400, detail="Path is not a directory")
 
-    directory_summary = get_directory_summary(target_path)
-    return directory_summary
+    return get_directory_summary(target_path)
 
 
 @app.post("/v1/upload")
@@ -396,7 +401,7 @@ async def v1_upload_file(file: UploadFile = File(...), path: str = Form(...)):
     file_location.parent.mkdir(parents=True, exist_ok=True)
     with open(file_location, "wb") as f:
         shutil.copyfileobj(file.file, f)
-    return JSONResponse(content={"filename": path})
+    return ORJSONResponse(content={"filename": path})
 
 
 @app.get("/")
@@ -417,7 +422,7 @@ if __name__ == "__main__":
     execute_database_migration()
     sync_metadata()
     watch_target_dir()
-    host = args.host if args.host else "localhost"
+    host = args.host or "localhost"
     doc_url = f"http://{host}:{args.port}/docs"
     shared.logger.info(f"API Document: {doc_url}")
     uvicorn.run(

@@ -62,8 +62,7 @@ def parse_arguments():
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=4777)
     parser.add_argument("--target_dir", type=str, default=".")
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
 
 
 def get_pictoria_directory():
@@ -108,8 +107,7 @@ def init_thumbnails_directory():
 
 
 def remove_deleted_files(session, *, os_tuples_set, db_tuples_set):
-    deleted_files = db_tuples_set - os_tuples_set
-    if deleted_files:
+    if deleted_files := db_tuples_set - os_tuples_set:
         logger.info(f"Detected {len(deleted_files)} files have been deleted")
         for file_path in deleted_files:
             delete_by_file_path_and_ext(session, file_path)
@@ -132,8 +130,7 @@ def delete_by_file_path_and_ext(session, file_path_and_ext):
 
 
 def add_new_files(session, *, os_tuples_set, db_tuples_set):
-    new_files = os_tuples_set - db_tuples_set
-    if new_files:
+    if new_files := os_tuples_set - db_tuples_set:
         logger.info(f"Detected {len(new_files)} new files")
         for file_path in new_files:
             image = Post(file_path=file_path[0], extension=file_path[1])
@@ -248,8 +245,8 @@ def process_post(session, file_abs_path=None, post=None):
     if post is None:
         file_path, extension = get_relative_path_and_extension(file_abs_path)
         post = session.query(Post).filter(Post.file_path == file_path, Post.extension == extension).first()
-        if post is None:
-            post = Post(file_path=file_path, extension=extension)
+    if post is None:
+        post = Post(file_path=file_path, extension=extension)
     if post is None:
         logger.info(f"Post not found in database: {file_abs_path}")
         return
@@ -259,38 +256,44 @@ def process_post(session, file_abs_path=None, post=None):
             file_data = file.read()
             file.seek(0)  # 重置文件指针位置
             with Image.open(file) as img:
-                img.verify()  # 验证图像文件的有效性。
-                # 读取长宽并更新数据库。
-                post.width, post.height = img.size
-                post.aspect_ratio = post.width / post.height
-                relative_path = file_abs_path.relative_to(shared.target_dir)
-                thumbnails_path = shared.thumbnails_dir / relative_path
-                if not thumbnails_path.exists():
-                    os.makedirs(thumbnails_path.parent, exist_ok=True)
-                    create_thumbnail(
-                        file_abs_path,
-                        thumbnails_path,
-                    )
-
+                compute_image_properties(img, post, file_abs_path)
     except Exception as e:
         logger.warn(f"Error processing file: {file_abs_path}")
         logger.exception(e)
     finally:
-        post.md5 = calculate_md5(file_data)
-        post.size = file_abs_path.stat().st_size
+        update_file_metadata(file_data, post, file_abs_path, session)
 
-        # 从 file_path 获取所有上级目录，存到列表里
-        folder = str(Path(post.file_path).parents[0]).replace("\\", "/")
 
-        # 查询 Folder 表，如果不存在则创建
-        folder_record = session.query(Folder).filter(Folder.path == folder).first()
-        if folder_record is None:
-            folder_record = Folder(path=folder, file_count=0)
-            session.add(folder_record)
-        folder_record.file_count += 1
+def update_file_metadata(file_data, post, file_abs_path, session):
+    post.md5 = calculate_md5(file_data)
+    post.size = file_abs_path.stat().st_size
 
-        session.add(post)
-        session.commit()
+    # 从 file_path 获取所有上级目录，存到列表里
+    folder = str(Path(post.file_path).parents[0]).replace("\\", "/")
+
+    # 查询 Folder 表，如果不存在则创建
+    folder_record = session.query(Folder).filter(Folder.path == folder).first()
+    if folder_record is None:
+        folder_record = Folder(path=folder, file_count=0)
+        session.add(folder_record)
+    folder_record.file_count += 1
+
+    session.add(post)
+    session.commit()
+
+
+def compute_image_properties(img, post, file_abs_path):
+    img.verify()
+    post.width, post.height = img.size
+    post.aspect_ratio = post.width / post.height
+    relative_path = file_abs_path.relative_to(shared.target_dir)
+    thumbnails_path = shared.thumbnails_dir / relative_path
+    if not thumbnails_path.exists():
+        os.makedirs(thumbnails_path.parent, exist_ok=True)
+        create_thumbnail(
+            file_abs_path,
+            thumbnails_path,
+        )
 
 
 def remove_post(session, file_abs_path=None, post=None, auto_commit=True):
