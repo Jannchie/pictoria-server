@@ -1,3 +1,4 @@
+import io
 import os
 import pathlib
 import shutil
@@ -5,6 +6,7 @@ import tomllib
 from typing import Annotated, Optional
 
 import fastapi
+import requests
 import uvicorn
 from fastapi import Body, File, Form, HTTPException, Path, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -401,9 +403,11 @@ DirectorySummary.update_forward_refs()
 
 
 def get_directory_summary(path: str) -> DirectorySummary:
+    path = pathlib.Path(path).relative_to(shared.target_dir)
+    path = str(path).replace("\\", "/")
     summary = DirectorySummary(
         name=os.path.basename(path),
-        path=str(pathlib.Path(path).relative_to(shared.target_dir)),
+        path=path,
         file_count=0,
         children=[],
     )
@@ -435,16 +439,41 @@ def v1_get_folders():
 
 
 @app.post("/v1/upload")
-async def v1_upload_file(file: UploadFile = File(...), path: str = Form(...), source: str = Form(None)):
+async def v1_upload_file(
+    file: UploadFile | None = File(None),
+    url: str | None = Form(None),
+    path: str | None = Form(None),
+    source: str = Form(None),
+):
+    if file is None and url is None:
+        raise HTTPException(status_code=400, detail="Either file or url must be provided")
+    if file is None:
+        headers = {
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+        }
+        if "pximg.net" in url:
+            headers["referer"] = "https://www.pixiv.net/"
+        resp = requests.get(url, headers=headers)
+
+        file_io = io.BytesIO(resp.content)
+    else:
+        file_io = file.file
+
+    if path is None and file is not None:
+        path = file.filename
+    else:
+        path = path or url.split("/")[-1]
+
     file_location = shared.target_dir / path
     file_location.parent.mkdir(parents=True, exist_ok=True)
     without_ext, ext = os.path.splitext(path)
+
     post = Post(file_path=without_ext, extension=ext.lstrip("."), source=source)
     session = get_session()
     session.add(post)
     session.commit()
     with open(file_location, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+        shutil.copyfileobj(file_io, f)
     return ORJSONResponse(content={"filename": path})
 
 
