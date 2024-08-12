@@ -71,6 +71,8 @@ class PostBase(SQLModel):
     meta: Optional[str] = None
     md5: Optional[str] = Field(default=None, index=True)
     size: Optional[int] = Field(default=None, index=True)
+    source: Optional[str] = Field(default=None, index=True)
+    caption: Optional[str] = Field(default=None)
 
 
 class Post(PostBase, table=True):

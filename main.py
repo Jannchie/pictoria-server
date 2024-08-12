@@ -1,7 +1,6 @@
 import os
 import pathlib
 import shutil
-import time
 import tomllib
 from typing import Annotated, Optional
 
@@ -342,6 +341,7 @@ def v1_cmd_auto_tags(post_id: int):
     if shared.tagger is None:
         shared.tagger = Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3", slient=True)
     resp = shared.tagger.tag(abs_path)
+    shared.logger.info(resp)
     post.rating = from_rating_to_int(resp.rating)
     attach_tags_to_post(session, post, resp, is_auto=True)
     session.commit()
@@ -354,16 +354,20 @@ def v1_cmd_auto_tags(post_id: int):
 def v1_cmd_auto_tags_all():
     session = get_session()
     posts = session.query(Post).all()
+    # posts = session.query(Post).filter(~Post.tags.any()).all()
     if shared.tagger is None:
         shared.tagger = Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3", slient=True)
 
     # 使用 rich 进度条
-    for post in track(posts, description="Processing posts..."):
-        abs_path = post.absolute_path
-        resp = shared.tagger.tag(abs_path)
-        post.rating = from_rating_to_int(resp.rating)
-        attach_tags_to_post(session, post, resp, is_auto=True)
-
+    for post in track(posts, description="Processing posts...", console=console):
+        try:
+            abs_path = post.absolute_path
+            resp = shared.tagger.tag(abs_path)
+            post.rating = from_rating_to_int(resp.rating)
+            attach_tags_to_post(session, post, resp, is_auto=True)
+        except Exception as e:
+            shared.logger.error(f"Error processing post {post.id}: {e}")
+            continue
     session.commit()
     return {"status": "ok"}
 
@@ -431,9 +435,14 @@ def v1_get_folders():
 
 
 @app.post("/v1/upload")
-async def v1_upload_file(file: UploadFile = File(...), path: str = Form(...)):
+async def v1_upload_file(file: UploadFile = File(...), path: str = Form(...), source: str = Form(None)):
     file_location = shared.target_dir / path
     file_location.parent.mkdir(parents=True, exist_ok=True)
+    without_ext, ext = os.path.splitext(path)
+    post = Post(file_path=without_ext, extension=ext.lstrip("."), source=source)
+    session = get_session()
+    session.add(post)
+    session.commit()
     with open(file_location, "wb") as f:
         shutil.copyfileobj(file.file, f)
     return ORJSONResponse(content={"filename": path})

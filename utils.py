@@ -445,7 +445,10 @@ def attach_tags_to_post(session, post: Post, resp: wdtagger.Result, is_auto=Fals
         name = group_names[i]
         tag_group = session.query(TagGroup).filter(TagGroup.name == name).first()
         existing_tag_records = {
-            tag_record.tag_name for tag_record in session.query(PostHasTag).filter(PostHasTag.tag_name.in_(tags)).all()
+            tag_record.tag_name
+            for tag_record in session.query(PostHasTag)
+            .filter(PostHasTag.tag_name.in_(tags) & (PostHasTag.post_id == post.id))
+            .all()
         }
         new_tags = set(tags) - existing_tag_records
 
