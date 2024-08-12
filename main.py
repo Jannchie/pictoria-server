@@ -213,6 +213,28 @@ def v1_update_post_rating(post_id: Annotated[int, Path(gt=0)], rating_update: Ra
     return post
 
 
+@app.put("/v1/posts/{post_id}/source")
+def v1_update_post_source(post_id: Annotated[int, Path(gt=0)], source: str):
+    session = get_session()
+    post = session.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    post.source = source
+    session.commit()
+    return post
+
+
+@app.put("/v1/posts/{post_id}/caption")
+def v1_update_post_caption(post_id: Annotated[int, Path(gt=0)], caption: str):
+    session = get_session()
+    post = session.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    post.caption = caption
+    session.commit()
+    return post
+
+
 @app.get("/v1/posts/{post_id}", response_model=PostWithTag)
 def v1_get_post(post_id: int):
     session = get_session()
