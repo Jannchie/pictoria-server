@@ -425,8 +425,12 @@ DirectorySummary.update_forward_refs()
 
 
 def get_directory_summary(path: str) -> DirectorySummary:
-    path = pathlib.Path(path).relative_to(shared.target_dir)
-    path = str(path).replace("\\", "/")
+    if not path.startswith(str(shared.target_dir)):
+        path = shared.target_dir / path
+    else:
+        path = pathlib.Path(path).relative_to(shared.target_dir)
+    path = str(path)
+    path = path.replace("\\", "/")
     summary = DirectorySummary(
         name=os.path.basename(path),
         path=path,
@@ -435,7 +439,7 @@ def get_directory_summary(path: str) -> DirectorySummary:
     )
 
     ignore_dirs = shared.pictoria_dir
-    with os.scandir(path) as entries:
+    with os.scandir(shared.target_dir / path) as entries:
         for entry in entries:
             if entry.name == ignore_dirs.name:
                 continue
