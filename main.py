@@ -104,7 +104,7 @@ def v1_get_posts(
 def v1_delete_post(post_id: int):
     session = get_session()
     post = session.query(Post).filter(Post.id == post_id).first()
-    delete_by_file_path_and_ext(session=session, file_path_and_ext=[post.file_path, post.extension])
+    delete_by_file_path_and_ext(session=session, path_name_and_ext=[post.file_path, post.extension])
     session.commit()
     return post
 
@@ -118,8 +118,8 @@ def apply_filtered_query(filter: PostFilter, query: fastapi.Query):
         query = query.join(Post.tags).filter(PostHasTag.tag_name.in_(filter.tags))
     if filter.extension:
         query = query.filter(Post.extension.in_(filter.extension))
-    if filter.folder and filter.folder != "." and filter.folder != "":
-        query = query.filter(Post.file_path.startswith(filter.folder))
+    if filter.folder and filter.folder != "":
+        query = query.filter(Post.file_path == filter.folder)
     return query
 
 

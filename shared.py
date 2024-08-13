@@ -27,7 +27,7 @@ def get_logger():
     )
 
     logger = logging.getLogger("pictoria")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     return logger
 
 

@@ -47,6 +47,7 @@ class Folder(SQLModel, table=True):
 class PostBase(SQLModel):
     id: int = Field(sa_column=Column(Integer, primary_key=True, autoincrement=True, nullable=False))
     file_path: str = Field(index=True)
+    file_name: str = Field(index=True)
     extension: str = Field(index=True)
 
     width: Optional[int] = Field(default=None, index=True)
@@ -77,13 +78,13 @@ class PostBase(SQLModel):
 
 class Post(PostBase, table=True):
     __tablename__ = "posts"
-    __table_args__ = (Index("idx_file_path_extension", "file_path", "extension", unique=True),)
+    __table_args__ = (Index("idx_file_path_name_extension", "file_path", "file_name", "extension", unique=True),)
 
     tags: List["PostHasTag"] = Relationship(back_populates="posts")
 
     @property
     def relative_path(self):
-        return f"{self.file_path}.{self.extension}"
+        return f"{self.file_path}/{self.file_name}.{self.extension}"
 
     @property
     def absolute_path(self):

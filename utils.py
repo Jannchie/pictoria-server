@@ -115,12 +115,16 @@ def remove_deleted_files(session, *, os_tuples_set, db_tuples_set):
         logger.info("Deleted files from database")
 
 
-def delete_by_file_path_and_ext(session, file_path_and_ext):
-    session.query(Post).filter(Post.file_path == file_path_and_ext[0], Post.extension == file_path_and_ext[1]).delete()
-    if file_path_and_ext[1]:
-        relative_path = Path(file_path_and_ext[0]).with_suffix(f".{file_path_and_ext[1]}")
+def delete_by_file_path_and_ext(session, path_name_and_ext):
+    session.query(Post).filter(
+        Post.file_path == path_name_and_ext[0],
+        Post.file_name == path_name_and_ext[1],
+        Post.extension == path_name_and_ext[2],
+    ).delete()
+    if path_name_and_ext[2]:
+        relative_path = (Path(path_name_and_ext[0]) / path_name_and_ext[1]).with_suffix(f".{path_name_and_ext[2]}")
     else:
-        relative_path = Path(file_path_and_ext[0])
+        relative_path = Path(path_name_and_ext[0]) / path_name_and_ext[1]
     file_path = shared.target_dir / relative_path
     thumbnails_path = shared.thumbnails_dir / relative_path
     if thumbnails_path.exists():
@@ -130,10 +134,11 @@ def delete_by_file_path_and_ext(session, file_path_and_ext):
 
 
 def add_new_files(session, *, os_tuples_set, db_tuples_set):
-    if new_files := os_tuples_set - db_tuples_set:
-        logger.info(f"Detected {len(new_files)} new files")
-        for file_path in new_files:
-            image = Post(file_path=file_path[0], extension=file_path[1])
+    if new_file_tuples := os_tuples_set - db_tuples_set:
+        logger.info(f"Detected {len(new_file_tuples)} new files")
+        for file_tuple in new_file_tuples:
+            print(file_tuple)
+            image = Post(file_path=file_tuple[0], file_name=file_tuple[1], extension=file_tuple[2])
             session.add(image)
         session.commit()
         logger.info("Added new files to database")
@@ -150,8 +155,8 @@ def _sync_metadata():
     os_tuples = find_files_in_directory(shared.target_dir)
 
     session = get_session()
-    rows = session.query(Post.file_path, Post.extension).all()
-    db_tuples = [(row[0], row[1]) for row in rows]
+    rows = session.query(Post.file_path, Post.file_name, Post.extension).all()
+    db_tuples = [(row[0], row[1], row[2]) for row in rows]
     logger.info(f"Found {len(db_tuples)} files in database")
 
     db_tuples_set = set(db_tuples)
@@ -169,16 +174,27 @@ def get_session(engine=None):
     return Session()
 
 
-def find_files_in_directory(target_dir):
-    os_tuples = []
+def get_relative_path(file_path: Path, target_dir: Path) -> str:
+    return str(file_path.relative_to(target_dir).parent)
+
+
+def get_file_name(file_path: Path) -> str:
+    return file_path.stem
+
+
+def get_file_extension(file_path: Path) -> str:
+    return file_path.suffix[1:]
+
+
+def find_files_in_directory(target_dir: Path) -> list[tuple[str, str, str]]:
+    os_tuples: list[tuple[str, str, str]] = []
     for file_path in target_dir.rglob("*"):
         relative_path = file_path.relative_to(target_dir)
         if file_path.is_file() and not relative_path.parts[0].startswith("."):
-            # 对于所有 relative_path, 需要将其拆分成路径 str 和扩展名 str 的 tuple。然后将其转换为 set。
-            ext = file_path.suffix[1:]
-            # 移除尾部的扩展名，强制使用正斜杠作为路径分隔符。
-            name_without_ext = str(relative_path.with_suffix("")).replace("\\", "/")
-            os_tuples.append((name_without_ext, ext))
+            path = get_relative_path(file_path, target_dir).replace("\\", "/")
+            name = get_file_name(file_path)
+            ext = get_file_extension(file_path)
+            os_tuples.append((path, name, ext))
     logger.info(f"Found {len(os_tuples)} files in target directory")
     return os_tuples
 
@@ -223,28 +239,35 @@ def process_posts(all=False):
             return
         task = progress.add_task("Processing posts...", total=len(posts))
         for post in posts:
-            # 从 file_path 和 extension 属性构建文件的完整路径。
-            file_abs_path = target_dir / post.file_path
+            # 构建文件的完整路径。
+            file_abs_path = target_dir / post.file_path / post.file_name
             file_abs_path = file_abs_path.with_suffix(f".{post.extension}")
             process_post(session, file_abs_path, post)
             progress.update(task, advance=1)
 
 
-def get_relative_path_and_extension(file_path: Path):
-    # 如果时绝对路径，则将其转换为相对路径。
+def get_path_name_and_extension(file_path: Path) -> tuple[str, str, str]:
+    # 如果是绝对路径，则将其转换为相对路径，相对于target_dir
     if file_path.is_absolute():
         basic_path = file_path.relative_to(shared.target_dir)
     else:
         basic_path = file_path
-    ext = file_path.suffix[1:]
-    name_without_ext = str(basic_path.with_suffix("")).replace("\\", "/")
-    return name_without_ext, ext
+
+    path = str(basic_path.parent).replace("\\", "/")  # 文件所在的目录，使用正斜杠分隔符
+    name = str(basic_path.stem)  # 不包含扩展名的文件名
+    ext = file_path.suffix[1:]  # 扩展名（不含点）
+
+    return path, name, ext
 
 
 def process_post(session, file_abs_path=None, post=None):
     if post is None:
-        file_path, extension = get_relative_path_and_extension(file_abs_path)
-        post = session.query(Post).filter(Post.file_path == file_path, Post.extension == extension).first()
+        file_path, file_name, extension = get_path_name_and_extension(file_abs_path)
+        post = (
+            session.query(Post)
+            .filter(Post.file_path == file_path, Post.file_name == file_name, Post.extension == extension)
+            .first()
+        )
     if post is None:
         post = Post(file_path=file_path, extension=extension)
     if post is None:
@@ -269,14 +292,14 @@ def update_file_metadata(file_data, post, file_abs_path, session):
     post.size = file_abs_path.stat().st_size
 
     # 从 file_path 获取所有上级目录，存到列表里
-    folder = str(Path(post.file_path).parents[0]).replace("\\", "/")
+    # folder = str(Path(post.file_path).parents[0]).replace("\\", "/")
 
-    # 查询 Folder 表，如果不存在则创建
-    folder_record = session.query(Folder).filter(Folder.path == folder).first()
-    if folder_record is None:
-        folder_record = Folder(path=folder, file_count=0)
-        session.add(folder_record)
-    folder_record.file_count += 1
+    # # 查询 Folder 表，如果不存在则创建
+    # folder_record = session.query(Folder).filter(Folder.path == folder).first()
+    # if folder_record is None:
+    #     folder_record = Folder(path=folder, file_count=0)
+    #     session.add(folder_record)
+    # folder_record.file_count += 1
 
     session.add(post)
     session.commit()
@@ -298,8 +321,12 @@ def compute_image_properties(img, post, file_abs_path):
 
 def remove_post(session, file_abs_path=None, post=None, auto_commit=True):
     if post is None:
-        file_path, extension = get_relative_path_and_extension(file_abs_path)
-        post = session.query(Post).filter(Post.file_path == file_path, Post.extension == extension).first()
+        file_path, file_name, extension = get_path_name_and_extension(file_abs_path)
+        post = (
+            session.query(Post)
+            .filter(Post.file_path == file_path, Post.file_name == file_name, Post.extension == extension)
+            .first()
+        )
     else:
         file_abs_path = shared.target_dir / post.file_path
         file_abs_path = file_abs_path.with_suffix(f".{post.extension}")
