@@ -21,14 +21,16 @@ from starlette.middleware.gzip import GZipMiddleware
 from wdtagger import Tagger
 
 import shared
+from ai import OpenAIImageAnnotator
 from models import Post, PostBase, PostHasTag, PostWithTag, Tag, TagGroup, TagPublic
 from utils import (
     attach_tags_to_post,
     delete_by_file_path_and_ext,
     execute_database_migration,
     from_rating_to_int,
+    get_path_name_and_extension,
     get_session,
-    initialize_directories,
+    initialize,
     parse_arguments,
     process_posts,
     sync_metadata,
@@ -396,6 +398,24 @@ def v1_cmd_auto_tags_all():
     return {"status": "ok"}
 
 
+@app.get("/v1/cmd/auto-caption/{post_id}")
+def v1_cmd_auto_caption(post_id: int):
+    session = get_session()
+    post: Post = session.query(Post).filter(Post.id == post_id).first()
+    if shared.openai_key is None:
+        raise HTTPException(status_code=400, detail="OpenAI API key is not set")
+
+    if shared.caption_annotator is None:
+        shared.caption_annotator = OpenAIImageAnnotator(shared.openai_key)
+
+    resp = shared.caption_annotator.annotate_image(post.absolute_path)
+    caption = resp.get("caption", "")
+    post.caption = caption
+    session.commit()
+    post = get_post_by_id(post_id, session)
+    return post
+
+
 class CountResponse(BaseModel):
     count: int
 
@@ -490,17 +510,25 @@ async def v1_upload_file(
     else:
         path = path or url.split("/")[-1]
 
-    file_location = shared.target_dir / path
-    file_location.parent.mkdir(parents=True, exist_ok=True)
-    without_ext, ext = os.path.splitext(path)
+    abs_path = shared.target_dir / path
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path, file_name, file_ext = get_path_name_and_extension(abs_path)
 
-    post = Post(file_path=without_ext, extension=ext.lstrip("."), source=source)
+    console.log(f"Saving file to: {abs_path}")
+    post = Post(file_path=file_path, file_name=file_name, extension=file_ext, source=source)
     session = get_session()
     session.add(post)
     session.commit()
-    with open(file_location, "wb") as f:
+    with open(abs_path, "wb") as f:
         shutil.copyfileobj(file_io, f)
     return ORJSONResponse(content={"filename": path})
+
+
+@app.post("/v1/cmd/update-openai-key")
+def v1_update_openai_key(key: str):
+    shared.openai_key = key
+    shared.pictoria_dir.joinpath("OPENAI_API_KEY").write_text(key)
+    return {"status": "ok"}
 
 
 @app.get("/")
@@ -516,8 +544,7 @@ def root():
 use_route_names_as_operation_ids(app)
 if __name__ == "__main__":
     args = parse_arguments()
-
-    initialize_directories(args)
+    initialize(args)
     execute_database_migration()
     sync_metadata()
     watch_target_dir()

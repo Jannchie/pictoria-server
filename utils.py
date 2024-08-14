@@ -25,11 +25,24 @@ from models import Folder, Post, PostHasTag, Tag, TagGroup
 from shared import logger
 
 
-def initialize_directories(args):
+def initialize(args):
+    prepare_paths(args)
+    prepare_openai_api(args)
+    init_thumbnails_directory()
+
+
+def prepare_openai_api(args):
+    if shared.pictoria_dir.joinpath("OPENAI_API_KEY").exists():
+        with open(shared.pictoria_dir.joinpath("OPENAI_API_KEY")) as f:
+            shared.openai_key = f.read().strip()
+    if args.openai_key:
+        shared.openai_key = args.openai_key
+
+
+def prepare_paths(args):
     shared.target_dir = get_target_dir(args)
     shared.pictoria_dir = get_pictoria_directory()
     shared.db_path = get_db_path()
-    init_thumbnails_directory()
 
 
 def use_route_names_as_operation_ids(app: FastAPI) -> None:
@@ -62,6 +75,7 @@ def parse_arguments():
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=4777)
     parser.add_argument("--target_dir", type=str, default=".")
+    parser.add_argument("--openai_key", type=str, default=None)
     return parser.parse_args()
 
 

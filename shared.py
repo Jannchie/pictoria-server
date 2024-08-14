@@ -6,6 +6,8 @@ from rich import get_console
 from rich.logging import RichHandler
 from wdtagger import Tagger
 
+from ai import OpenAIImageAnnotator
+
 db_path: None | Path = None
 
 target_dir: None | Path = None
@@ -16,6 +18,9 @@ should_watch = True
 stop_event = threading.Event()
 
 console = get_console()
+
+openai_key: None | str = None
+caption_annotator: None | OpenAIImageAnnotator = None
 
 
 def get_logger():
