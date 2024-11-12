@@ -129,7 +129,7 @@ def remove_deleted_files(session, *, os_tuples_set, db_tuples_set):
         logger.info("Deleted files from database")
 
 
-def delete_by_file_path_and_ext(session, path_name_and_ext):
+def delete_by_file_path_and_ext(session, path_name_and_ext: tuple[str, str, str]):
     session.query(Post).filter(
         Post.file_path == path_name_and_ext[0],
         Post.file_name == path_name_and_ext[1],
@@ -208,6 +208,8 @@ def find_files_in_directory(target_dir: Path) -> list[tuple[str, str, str]]:
             path = get_relative_path(file_path, target_dir).replace("\\", "/")
             name = get_file_name(file_path)
             ext = get_file_extension(file_path)
+            if path == ".":
+                path = "@"
             os_tuples.append((path, name, ext))
     logger.info(f"Found {len(os_tuples)} files in target directory")
     return os_tuples
@@ -288,6 +290,15 @@ def process_post(session, file_abs_path=None, post=None):
         logger.info(f"Post not found in database: {file_abs_path}")
         return
     try:
+        if file_abs_path.suffix.lower() not in [
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".webp",
+        ]:
+            logger.debug(f"Skipping file: {file_abs_path}")
+            return
         logger.debug(f"Processing file: {file_abs_path}")
         with file_abs_path.open("rb") as file:
             file_data = file.read()
@@ -295,7 +306,7 @@ def process_post(session, file_abs_path=None, post=None):
             with Image.open(file) as img:
                 compute_image_properties(img, post, file_abs_path)
     except Exception as e:
-        logger.warn(f"Error processing file: {file_abs_path}")
+        logger.warning(f"Error processing file: {file_abs_path}")
         logger.exception(e)
     finally:
         update_file_metadata(file_data, post, file_abs_path, session)
@@ -319,10 +330,9 @@ def update_file_metadata(file_data, post, file_abs_path, session):
     session.commit()
 
 
-def compute_image_properties(img, post, file_abs_path):
+def compute_image_properties(img: Image.Image, post: Post, file_abs_path: Path):
     img.verify()
     post.width, post.height = img.size
-    post.aspect_ratio = post.width / post.height
     relative_path = file_abs_path.relative_to(shared.target_dir)
     thumbnails_path = shared.thumbnails_dir / relative_path
     if not thumbnails_path.exists():
@@ -379,6 +389,7 @@ class Watcher:
     def run(self):
         event_handler = Handler()
         self.observer.schedule(event_handler, self.DIRECTORY_TO_WATCH, recursive=True)
+        logger.info("Starting watcher")
         self.observer.start()
         while not shared.stop_event.is_set():
             time.sleep(1)

@@ -105,8 +105,10 @@ def v1_get_posts(
 @app.delete("/v1/posts/{post_id}")
 def v1_delete_post(post_id: int):
     session = get_session()
-    post = session.query(Post).filter(Post.id == post_id).first()
-    delete_by_file_path_and_ext(session=session, path_name_and_ext=[post.file_path, post.extension])
+    post = session.get(Post, post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+    delete_by_file_path_and_ext(session=session, path_name_and_ext=[post.file_path, post.file_name, post.extension])
     session.commit()
     return post
 
@@ -485,7 +487,7 @@ def v1_get_folders():
 
 
 @app.post("/v1/upload")
-async def v1_upload_file(
+def v1_upload_file(
     file: UploadFile | None = File(None),
     url: str | None = Form(None),
     path: str | None = Form(None),
@@ -499,8 +501,8 @@ async def v1_upload_file(
         }
         if "pximg.net" in url:
             headers["referer"] = "https://www.pixiv.net/"
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, headers=headers)
+        with httpx.Client() as client:
+            resp = client.get(url, headers=headers)
 
         file_io = io.BytesIO(resp.content)
     else:
