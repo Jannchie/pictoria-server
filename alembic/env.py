@@ -1,6 +1,6 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, event, pool
 
 from alembic import context
 from models import Base
@@ -64,6 +64,14 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+
+    @event.listens_for(connectable, "connect")
+    def do_connect(dbapi_connection, connection_record):
+        dbapi_connection.isolation_level = None
+
+    @event.listens_for(connectable, "begin")
+    def do_begin(conn):
+        conn.exec_driver_sql("BEGIN")
 
     with connectable.connect() as connection:
         context.configure(
