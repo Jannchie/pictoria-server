@@ -1,9 +1,10 @@
 from datetime import UTC, datetime
 from typing import List, Optional
 
+from PIL import Image
 from sqlalchemy import Column, Computed, Float, Index, Integer
 from sqlalchemy.ext.declarative import declarative_base
-from sqlmodel import Field, Relationship, SQLModel
+from sqlmodel import Field, Relationship, Session, SQLModel
 
 import shared
 
@@ -88,6 +89,24 @@ class Post(PostBase, table=True):
     @property
     def absolute_path(self):
         return f"{shared.target_dir}/{self.relative_path}"
+
+    @property
+    def thumbnail_path(self):
+        return f"{shared.thumbnails_dir}/{self.relative_path}"
+
+    def rotate(self, session: Session, clockwise: bool = True):
+        from utils import calculate_md5, create_thumbnail_by_image
+
+        image = Image.open(self.absolute_path)
+        image = image.rotate(90 if clockwise else -90, expand=True)
+        image.save(self.absolute_path)
+        create_thumbnail_by_image(image, self.thumbnail_path)
+        file_data = image.tobytes()
+        self.md5 = calculate_md5(file_data)
+        self.width, self.height = image.size
+        session.add(self)
+        session.commit()
+        session.refresh(self)
 
 
 class PostHasTagBase(SQLModel):

@@ -8,14 +8,14 @@ from typing import Annotated, Optional
 import fastapi
 import httpx
 import uvicorn
-from fastapi import Body, File, Form, HTTPException, Path, UploadFile
+from fastapi import Body, Depends, File, Form, HTTPException, Path, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, Field
 from rich import get_console
 from rich.progress import track
 from sqlalchemy import func
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import Session, joinedload
 from starlette.convertors import Convertor, register_url_convertor
 from starlette.middleware.gzip import GZipMiddleware
 from wdtagger import Tagger
@@ -75,6 +75,8 @@ def get_post_by_id(post_id, session) -> PostWithTag:
         .options(joinedload(Post.tags).joinedload(PostHasTag.tag_info))
         .first()
     )
+    if post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
     for tag in post.tags:
         assert isinstance(tag, PostHasTag)
     return post
@@ -103,7 +105,7 @@ def v1_get_posts(
     return query.all()
 
 
-@app.delete("/v1/posts/{post_id}", response_model=PostWithTag, tags=["Post"])
+@app.delete("/v1/posts/{post_id}", tags=["Post"])
 def v1_delete_post(post_id: int):
     session = get_session()
     post = session.get(Post, post_id)
@@ -111,7 +113,7 @@ def v1_delete_post(post_id: int):
         raise HTTPException(status_code=404, detail="Post not found")
     delete_by_file_path_and_ext(session=session, path_name_and_ext=[post.file_path, post.file_name, post.extension])
     session.commit()
-    return post
+    return
 
 
 def apply_filtered_query(filter: PostFilter, query: fastapi.Query):
@@ -256,6 +258,15 @@ def v1_get_post_by_path(post_path: str):
 def v1_get_thumbnail(post_path: str):
     abs_path = shared.thumbnails_dir / post_path
     return fastapi.responses.FileResponse(abs_path)
+
+
+@app.put("/v1/cmd/posts/{post_id}/rotate", response_model=Post, tags=["Command"])
+def v1_cmd_rotate_image(post_id: int, clockwise: bool = True, session: Session = Depends(get_session)):
+    post = session.get(Post, post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+    post.rotate(session, clockwise)
+    return post
 
 
 class TagResponse(BaseModel):

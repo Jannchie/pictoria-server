@@ -1,6 +1,6 @@
 import argparse
-import contextlib
 import hashlib
+import io
 import multiprocessing
 import os
 import signal
@@ -21,7 +21,7 @@ from watchdog.observers import Observer
 import shared
 from alembic import command
 from alembic.config import Config
-from models import Folder, Post, PostHasTag, Tag, TagGroup
+from models import Post, PostHasTag, Tag, TagGroup
 from shared import logger
 
 
@@ -222,12 +222,16 @@ def calculate_md5(file: bytes) -> str:
 
 def create_thumbnail(input_image_path, output_image_path, max_width=400):
     with Image.open(input_image_path) as img:
-        width, height = img.size
-        if width > max_width:
-            new_width = max_width
-            new_height = int((new_width / width) * height)
-            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        img.save(output_image_path)
+        create_thumbnail_by_image(img, output_image_path, max_width)
+
+
+def create_thumbnail_by_image(img: Image.Image, output_image_path, max_width=400):
+    width, height = img.size
+    if width > max_width:
+        new_width = max_width
+        new_height = int((new_width / width) * height)
+        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    img.save(output_image_path)
 
 
 def process_posts(all=False):
