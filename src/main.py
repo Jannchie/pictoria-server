@@ -91,6 +91,7 @@ class PostFilter(BaseModel):
 @app.post(
     "/v1/posts",
     response_model=list[PostBase],
+    tags=["Post"],
 )
 def v1_get_posts(
     limit: int | None = None,
@@ -102,7 +103,7 @@ def v1_get_posts(
     return query.all()
 
 
-@app.delete("/v1/posts/{post_id}")
+@app.delete("/v1/posts/{post_id}", response_model=PostWithTag, tags=["Post"])
 def v1_delete_post(post_id: int):
     session = get_session()
     post = session.get(Post, post_id)
@@ -131,7 +132,7 @@ class PostCountResponse(BaseModel):
     count: int
 
 
-@app.get("/v1/posts/count", response_model=PostCountResponse)
+@app.get("/v1/posts/count", response_model=PostCountResponse, tags=["Post"])
 def v1_total_posts_count():
     session = get_session()
     count = session.query(Post).count()
@@ -143,7 +144,7 @@ class RatingCountResponse(BaseModel):
     count: int
 
 
-@app.post("/v1/posts/count/rating", response_model=list[RatingCountResponse])
+@app.post("/v1/posts/count/rating", response_model=list[RatingCountResponse], tags=["Post"])
 def v1_count_group_by_rating(
     filter: PostFilter = Body(...),
 ):
@@ -160,7 +161,7 @@ class ScoreCountResponse(BaseModel):
     count: int
 
 
-@app.post("/v1/posts/count/score", response_model=list[ScoreCountResponse])
+@app.post("/v1/posts/count/score", response_model=list[ScoreCountResponse], tags=["Post"])
 def v1_count_group_by_score(
     filter: PostFilter = Body(...),
 ):
@@ -176,7 +177,7 @@ class ExtensionCountResponse(BaseModel):
     count: int
 
 
-@app.post("/v1/posts/count/extension", response_model=list[ExtensionCountResponse])
+@app.post("/v1/posts/count/extension", response_model=list[ExtensionCountResponse], tags=["Post"])
 def v1_count_group_by_extension(
     filter: PostFilter = Body(...),
 ):
@@ -191,7 +192,7 @@ class ScoreUpdate(BaseModel):
     score: Annotated[int, Field(ge=0, le=5)]
 
 
-@app.put("/v1/posts/{post_id}/score", response_model=Post)
+@app.put("/v1/posts/{post_id}/score", response_model=Post, tags=["Post"])
 def v1_update_post_score(post_id: Annotated[int, Path(gt=0)], score_update: ScoreUpdate):
     session = get_session()
     post = session.query(Post).filter(Post.id == post_id).first()
@@ -206,7 +207,7 @@ class RatingUpdate(BaseModel):
     rating: Annotated[int, Field(ge=0, le=5)]
 
 
-@app.put("/v1/posts/{post_id}/rating", response_model=Post)
+@app.put("/v1/posts/{post_id}/rating", response_model=Post, tags=["Post"])
 def v1_update_post_rating(post_id: Annotated[int, Path(gt=0)], rating_update: RatingUpdate):
     session = get_session()
     post = session.query(Post).filter(Post.id == post_id).first()
@@ -217,7 +218,7 @@ def v1_update_post_rating(post_id: Annotated[int, Path(gt=0)], rating_update: Ra
     return post
 
 
-@app.put("/v1/posts/{post_id}/source", response_model=Post)
+@app.put("/v1/posts/{post_id}/source", response_model=Post, tags=["Post"])
 def v1_update_post_source(post_id: Annotated[int, Path(gt=0)], source: str):
     session = get_session()
     post = session.query(Post).filter(Post.id == post_id).first()
@@ -228,7 +229,7 @@ def v1_update_post_source(post_id: Annotated[int, Path(gt=0)], source: str):
     return post
 
 
-@app.put("/v1/posts/{post_id}/caption", response_model=Post)
+@app.put("/v1/posts/{post_id}/caption", response_model=Post, tags=["Post"])
 def v1_update_post_caption(post_id: Annotated[int, Path(gt=0)], caption: str):
     session = get_session()
     post = session.query(Post).filter(Post.id == post_id).first()
@@ -239,19 +240,19 @@ def v1_update_post_caption(post_id: Annotated[int, Path(gt=0)], caption: str):
     return post
 
 
-@app.get("/v1/posts/{post_id}", response_model=PostWithTag)
+@app.get("/v1/posts/{post_id}", response_model=PostWithTag, tags=["Post"])
 def v1_get_post(post_id: int):
     session = get_session()
     return get_post_by_id(post_id, session)
 
 
-@app.get("/v1/images/{post_path:pathlike}")
+@app.get("/v1/images/{post_path:pathlike}", tags=["Image"])
 def v1_get_post_by_path(post_path: str):
     abs_path = shared.target_dir / post_path
     return fastapi.responses.FileResponse(abs_path)
 
 
-@app.get("/v1/thumbnails/{post_path:pathlike}")
+@app.get("/v1/thumbnails/{post_path:pathlike}", tags=["Image"])
 def v1_get_thumbnail(post_path: str):
     abs_path = shared.thumbnails_dir / post_path
     return fastapi.responses.FileResponse(abs_path)
@@ -262,7 +263,7 @@ class TagResponse(BaseModel):
     tag_info: TagPublic
 
 
-@app.get("/v1/tags", response_model=list[TagResponse])
+@app.get("/v1/tags", response_model=list[TagResponse], tags=["Tag"])
 def v1_get_tags():
     session = get_session()
     # 从 PostHasTag 表中查询所有的 tag_name 和 count，从 Tag 表中查询 tag_name 对应的 Tag 实例
@@ -281,7 +282,7 @@ def v1_get_tags():
     ]
 
 
-@app.post("/v1/tag/{tag_name}", response_model=Tag)
+@app.post("/v1/tag/{tag_name}", response_model=Tag, tags=["Tag"])
 def v1_create_tag(tag_name: str):
     session = get_session()
     tag = Tag(name=tag_name)
@@ -290,7 +291,7 @@ def v1_create_tag(tag_name: str):
     return tag
 
 
-@app.delete("/v1/tag/{tag_name}", response_model=Tag)
+@app.delete("/v1/tag/{tag_name}", response_model=Tag, tags=["Tag"])
 def v1_delete_tag(tag_name: str):
     session = get_session()
     tag = session.query(Tag).filter(Tag.name == tag_name).first()
@@ -299,13 +300,13 @@ def v1_delete_tag(tag_name: str):
     return tag
 
 
-@app.get("/v1/tags/{tag_name}", response_model=Tag)
+@app.get("/v1/tags/{tag_name}", response_model=Tag, tags=["Tag"])
 def v1_get_tag(tag_name: str):
     session = get_session()
     return session.query(Tag).filter(Tag.name == tag_name).first()
 
 
-@app.put("/v1/tags/{tag_name}", response_model=Tag)
+@app.put("/v1/tags/{tag_name}", response_model=Tag, tags=["Tag"])
 def v1_update_tag(tag_name: str, new_tag_name: str):
     session = get_session()
     tag = session.query(Tag).filter(Tag.name == tag_name).first()
@@ -314,7 +315,7 @@ def v1_update_tag(tag_name: str, new_tag_name: str):
     return tag
 
 
-@app.post("/v1/posts/{post_id}/tags/{tag_name}", response_model=PostWithTag)
+@app.post("/v1/posts/{post_id}/tags/{tag_name}", response_model=PostWithTag, tags=["Tag"])
 def v1_add_tag_to_post(post_id: int, tag_name: str):
     session = get_session()
     post = session.query(Post).filter(Post.id == post_id).first()
@@ -336,7 +337,7 @@ def v1_add_tag_to_post(post_id: int, tag_name: str):
     return post
 
 
-@app.delete("/v1/posts/{post_id}/tags/{tag_name}", response_model=PostWithTag)
+@app.delete("/v1/posts/{post_id}/tags/{tag_name}", response_model=PostWithTag, tags=["Tag"])
 def v1_remove_tag_from_post(post_id: int, tag_name: str):
     session = get_session()
     post = session.query(Post).filter(Post.id == post_id).first()
@@ -348,19 +349,19 @@ def v1_remove_tag_from_post(post_id: int, tag_name: str):
     return post
 
 
-@app.get("/v1/tag-groups", response_model=list[TagGroup])
+@app.get("/v1/tag-groups", response_model=list[TagGroup], tags=["Tag"])
 def v1_get_tag_groups():
     session = get_session()
     return session.query(TagGroup).all()
 
 
-@app.post("/v1/cmd/process-posts")
+@app.post("/v1/cmd/process-posts", tags=["Command"])
 def v1_cmd_process_posts():
     process_posts(True)
     return {"status": "ok"}
 
 
-@app.get("/v1/cmd/auto-tags/{post_id}", response_model=Post)
+@app.get("/v1/cmd/auto-tags/{post_id}", response_model=Post, tags=["Command"])
 def v1_cmd_auto_tags(post_id: int):
     session = get_session()
     post = session.query(Post).filter(Post.id == post_id).first()
@@ -378,7 +379,7 @@ def v1_cmd_auto_tags(post_id: int):
     return post
 
 
-@app.get("/v1/cmd/auto-tags")
+@app.get("/v1/cmd/auto-tags", tags=["Command"])
 def v1_cmd_auto_tags_all():
     session = get_session()
     posts = session.query(Post).all()
@@ -400,7 +401,7 @@ def v1_cmd_auto_tags_all():
     return {"status": "ok"}
 
 
-@app.get("/v1/cmd/auto-caption/{post_id}", response_model=Post)
+@app.get("/v1/cmd/auto-caption/{post_id}", response_model=Post, tags=["Command"])
 def v1_cmd_auto_caption(post_id: int):
     session = get_session()
     post: Post = session.query(Post).filter(Post.id == post_id).first()
@@ -422,14 +423,14 @@ class CountResponse(BaseModel):
     count: int
 
 
-@app.get("/v1/posts/count", response_model=CountResponse)
+@app.get("/v1/posts/count", response_model=CountResponse, tags=["Post"])
 def v1_get_posts_count():
     session = get_session()
     count = session.query(Post).count()
     return {"count": count}
 
 
-@app.get("/v1/tags/count", response_model=CountResponse)
+@app.get("/v1/tags/count", response_model=CountResponse, tags=["Tag"])
 def v1_get_tags_count():
     session = get_session()
     count = session.query(Tag).count()
@@ -475,7 +476,7 @@ def get_directory_summary(path: str) -> DirectorySummary:
     return summary
 
 
-@app.get("/v1/folders", response_model=DirectorySummary)
+@app.get("/v1/folders", response_model=DirectorySummary, tags=["Folder"])
 def v1_get_folders():
     target_path = str(shared.target_dir)
     if not os.path.exists(target_path):
@@ -486,7 +487,7 @@ def v1_get_folders():
     return get_directory_summary(target_path)
 
 
-@app.post("/v1/upload")
+@app.post("/v1/upload", tags=["Upload"])
 def v1_upload_file(
     file: UploadFile | None = File(None),
     url: str | None = Form(None),
@@ -527,7 +528,7 @@ def v1_upload_file(
     return ORJSONResponse(content={"filename": path})
 
 
-@app.post("/v1/cmd/update-openai-key")
+@app.post("/v1/cmd/update-openai-key", tags=["Command"])
 def v1_update_openai_key(key: str):
     shared.openai_key = key
     shared.pictoria_dir.joinpath("OPENAI_API_KEY").write_text(key)

@@ -208,8 +208,6 @@ def find_files_in_directory(target_dir: Path) -> list[tuple[str, str, str]]:
             path = get_relative_path(file_path, target_dir).replace("\\", "/")
             name = get_file_name(file_path)
             ext = get_file_extension(file_path)
-            if path == ".":
-                path = "@"
             os_tuples.append((path, name, ext))
     logger.info(f"Found {len(os_tuples)} files in target directory")
     return os_tuples
