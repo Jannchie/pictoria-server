@@ -17,7 +17,25 @@ dependencies = [
     "alembic>=1.14.0",
     "python-multipart>=0.0.17",
     "orjson>=3.10.11",
+    "onnxruntime-gpu>=1.20.0",
+    "torch==2.5.1+cu124",
+    "torchvision==0.20.1+cu124",
 ]
+
+requires-python = ">=3.11"
 
 [tool.black]
 line-length = 120
+
+[[tool.uv.index]]
+name = "default"
+url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }
