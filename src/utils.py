@@ -1,7 +1,5 @@
 import argparse
 import hashlib
-import io
-import multiprocessing
 import os
 import signal
 import threading
@@ -62,7 +60,9 @@ def migrate_db(db_path):
     alembic_cfg = Config("alembic.ini")
     alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
     try:
+        logger.info("Migrating database...")
         command.upgrade(alembic_cfg, "head")
+        logger.info("Database migration successful")
     except Exception as e:
         logger.error(f"Error while migrating database: {e}")
         exit(1)
@@ -108,9 +108,10 @@ def get_db_path():
 
 
 def execute_database_migration():
-    task = multiprocessing.Process(target=migrate_db, args=(shared.db_path,))
-    task.start()
-    task.join()
+    # task = multiprocessing.Process(target=migrate_db, args=(shared.db_path,))
+    migrate_db(shared.db_path)
+    # task.start()
+    # task.join()
 
 
 def init_thumbnails_directory():

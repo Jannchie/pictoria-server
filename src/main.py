@@ -26,11 +26,11 @@ from models import Post, PostBase, PostHasTag, PostWithTag, Tag, TagGroup, TagPu
 from utils import (
     attach_tags_to_post,
     delete_by_file_path_and_ext,
-    execute_database_migration,
     from_rating_to_int,
     get_path_name_and_extension,
     get_session,
     initialize,
+    logger,
     parse_arguments,
     process_posts,
     sync_metadata,
@@ -528,8 +528,9 @@ def v1_upload_file(
     abs_path = shared.target_dir / path
     abs_path.parent.mkdir(parents=True, exist_ok=True)
     file_path, file_name, file_ext = get_path_name_and_extension(abs_path)
-
-    console.log(f"Saving file to: {abs_path}")
+    logger.info(f"Saving file to: {abs_path}")
+    if abs_path.exists():
+        raise HTTPException(status_code=400, detail="File already exists")
     post = Post(file_path=file_path, file_name=file_name, extension=file_ext, source=source)
     session = get_session()
     session.add(post)
@@ -560,7 +561,6 @@ use_route_names_as_operation_ids(app)
 if __name__ == "__main__":
     args = parse_arguments()
     initialize(args)
-    execute_database_migration()
     sync_metadata()
     watch_target_dir()
     host = args.host or "localhost"
