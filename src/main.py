@@ -288,7 +288,7 @@ def v1_cmd_rotate_image(post_id: int, clockwise: bool = True, session: Session =
 
 class TagAndGroupIdPublic(BaseModel):
     name: str
-    group_id: int
+    group_id: Optional[int]
 
 
 class TagResponse(BaseModel):
@@ -366,7 +366,7 @@ def v1_add_tag_to_post(post_id: int, tag_name: str):
         session.query(PostHasTag).filter(PostHasTag.post_id == post_id, PostHasTag.tag_name == tag_name).first()
     )
     if post_has_tag is None:
-        postHasTag = PostHasTag(post=post, post_id=post_id, tag_name=tag_name, tag_info=tag)
+        postHasTag = PostHasTag(post_id=post_id, tag_name=tag_name)
         session.add(postHasTag)
         session.commit()
     return get_post_by_id(post_id, session)
@@ -388,9 +388,8 @@ def v1_remove_tag_from_post(post_id: int, tag_name: str):
 
 
 @app.get("/v1/tag-groups", response_model=list[TagGroupWithTagsPublic], tags=["Tag"])
-def v1_get_tag_groups():
-    session = get_session()
-    return session.query(TagGroup).all()
+def v1_get_tag_groups(session: Session = Depends(get_session)):
+    return session.scalars(select(TagGroup))
 
 
 @app.post("/v1/cmd/process-posts", tags=["Command"])
@@ -399,7 +398,7 @@ def v1_cmd_process_posts():
     return {"status": "ok"}
 
 
-@app.get("/v1/cmd/auto-tags/{post_id}", response_model=Post, tags=["Command"])
+@app.get("/v1/cmd/auto-tags/{post_id}", response_model=PostWithTagPublic, tags=["Command"])
 def v1_cmd_auto_tags(post_id: int):
     session = get_session()
     # post = session.query(Post).filter(Post.id == post_id).first()

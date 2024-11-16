@@ -32,7 +32,7 @@ class Base(DeclarativeBase, MappedAsDataclass):
 class TagGroup(Base):
     __tablename__ = "tag_groups"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, nullable=False, default=None)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, nullable=False, init=False)
     name: Mapped[str] = mapped_column(String(120), index=True, nullable=False, default="", server_default="")
     color: Mapped[str] = mapped_column(String(9), nullable=False, default="", server_default="")
 
@@ -64,26 +64,23 @@ class TagGroupWithTagsPublic(TagGroupPublic):
 class Tag(Base):
     __tablename__ = "tags"
     name: Mapped[str] = mapped_column(String(120), primary_key=True, nullable=False)
-    group_id: Mapped[int] = mapped_column(ForeignKey("tag_groups.id"), nullable=True, default=None)
+    group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tag_groups.id"), nullable=True, default=None)
     count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    group: Mapped["TagGroup"] = relationship("TagGroup", back_populates="tags", default=None, lazy="select")
+    group: Mapped[Optional["TagGroup"]] = relationship("TagGroup", back_populates="tags", default=None, lazy="select")
     posts: Mapped[list["PostHasTag"]] = relationship(
         "PostHasTag", back_populates="tag_info", default_factory=list, lazy="select"
     )
 
 
 class TagWithGroupPublic(TagPublic):
-    group: TagGroupPublic
-    pass
+    group: Optional[TagGroupPublic]
 
 
 class Post(Base):
     __tablename__ = "posts"
     __table_args__ = (Index("idx_file_path_name_extension", "file_path", "file_name", "extension", unique=True),)
 
-    id: Mapped[Optional[int]] = mapped_column(
-        Integer, primary_key=True, autoincrement=True, nullable=False, default=None
-    )
+    id: Mapped[Optional[int]] = mapped_column(Integer, primary_key=True, autoincrement=True, nullable=False, init=False)
     file_path: Mapped[str] = mapped_column(String, index=True, default="")
     file_name: Mapped[str] = mapped_column(String, index=True, default="")
     extension: Mapped[str] = mapped_column(String, index=True, default="")
@@ -153,8 +150,8 @@ class PostHasTag(Base):
     post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True)
     tag_name: Mapped[str] = mapped_column(ForeignKey("tags.name"), primary_key=True)
 
-    post: Mapped["Post"] = relationship("Post", back_populates="tags", lazy="select", default=None)
-    tag_info: Mapped["Tag"] = relationship("Tag", back_populates="posts", lazy="select", default=None)
+    post: Mapped["Post"] = relationship("Post", back_populates="tags", lazy="select", init=False)
+    tag_info: Mapped["Tag"] = relationship("Tag", back_populates="posts", lazy="select", init=False)
     is_auto: Mapped[bool] = mapped_column(Boolean, default=False)
 
 

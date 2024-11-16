@@ -12,8 +12,8 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from PIL import Image
 from rich.progress import Progress
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, sessionmaker
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -491,7 +491,7 @@ def from_rating_to_int(rating):
         return 0
 
 
-def attach_tags_to_post(session, post: Post, resp: wdtagger.Result, is_auto=False):
+def attach_tags_to_post(session: Session, post: Post, resp: wdtagger.Result, is_auto=False):
     # 统一查看是否有名为 general 或者 character 的 TagGroup，如果没有则创建
     group_names = ["general", "character"]
     colors = {
@@ -508,19 +508,19 @@ def attach_tags_to_post(session, post: Post, resp: wdtagger.Result, is_auto=Fals
     # 遍历标签并进行处理
     for i, tags in enumerate([resp.general_tags, resp.character_tags]):
         name = group_names[i]
-        tag_group = session.query(TagGroup).filter(TagGroup.name == name).first()
+        tag_group = session.execute(select(TagGroup).where(TagGroup.name == name)).scalar_one()
         existing_tag_records = {
             tag_record.tag_name
-            for tag_record in session.query(PostHasTag)
-            .filter(PostHasTag.tag_name.in_(tags) & (PostHasTag.post_id == post.id))
-            .all()
+            for tag_record in session.scalars(
+                select(PostHasTag).filter(PostHasTag.tag_name.in_(tags) & (PostHasTag.post_id == post.id))
+            ).all()
         }
         new_tags = set(tags) - existing_tag_records
 
         # 如果已有的 tag 不属于任何 tag group，则将其放到相应的 tag_group 中
         for tag_name in existing_tag_records:
-            tag = session.query(Tag).filter(Tag.name == tag_name).first()
-            if tag.group_id is None:
+            tag = session.get(Tag, tag_name)
+            if tag and tag.group_id is None:
                 tag.group_id = tag_group.id
                 session.add(tag)
 
