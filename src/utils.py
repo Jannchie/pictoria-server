@@ -5,6 +5,7 @@ import signal
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 import wdtagger
 from fastapi import FastAPI
@@ -30,6 +31,9 @@ def initialize(args):
 
 
 def prepare_openai_api(args):
+    if not shared.pictoria_dir:
+        logger.warning("Pictoria directory not set, skipping OpenAI API key setup")
+        return
     if shared.pictoria_dir.joinpath("OPENAI_API_KEY").exists():
         with open(shared.pictoria_dir.joinpath("OPENAI_API_KEY")) as f:
             shared.openai_key = f.read().strip()
@@ -89,7 +93,7 @@ def get_pictoria_directory():
 
 def validate_path(target_path):
     if not target_path.exists():
-        logger.info(f'Error: Path "{target_path}" does not exist', style="bold red")
+        logger.info(f'Error: Path "{target_path}" does not exist')
         exit(1)
 
 
@@ -154,6 +158,7 @@ def add_new_files(session, *, os_tuples_set, db_tuples_set):
         for file_tuple in new_file_tuples:
             print(file_tuple)
             image = Post(file_path=file_tuple[0], file_name=file_tuple[1], extension=file_tuple[2])
+
             session.add(image)
         session.commit()
         logger.info("Added new files to database")
@@ -248,7 +253,7 @@ def process_posts(all=False):
     session = Session()
 
     if not all:
-        posts = session.query(Post).filter(Post.md5.is_(None)).all()
+        posts = session.query(Post).filter(Post.md5.is_("")).all()
     else:
         posts = session.query(Post).all()
     with Progress(console=shared.console) as progress:
@@ -279,7 +284,7 @@ def get_path_name_and_extension(file_path: Path) -> tuple[str, str, str]:
     return path, name, ext
 
 
-def process_post(session, file_abs_path=None, post=None):
+def process_post(session, file_abs_path: Optional[Path] = None, post: Optional[Post] = None):
     if post is None:
         file_path, file_name, extension = get_path_name_and_extension(file_abs_path)
         post = (
@@ -288,11 +293,13 @@ def process_post(session, file_abs_path=None, post=None):
             .first()
         )
     if post is None:
-        post = Post(file_path=file_path, extension=extension)
-    if post is None:
         logger.info(f"Post not found in database: {file_abs_path}")
         return
+    file_data = None
     try:
+        if file_abs_path is None:
+            file_abs_path = shared.target_dir / post.file_path / post.file_name
+            file_abs_path = file_abs_path.with_suffix(f".{post.extension}")
         if file_abs_path.suffix.lower() not in [
             ".jpg",
             ".jpeg",
@@ -312,7 +319,8 @@ def process_post(session, file_abs_path=None, post=None):
         logger.warning(f"Error processing file: {file_abs_path}")
         logger.exception(e)
     finally:
-        update_file_metadata(file_data, post, file_abs_path, session)
+        if file_data:
+            update_file_metadata(file_data, post, file_abs_path, session)
 
 
 def update_file_metadata(file_data, post, file_abs_path, session):
@@ -361,6 +369,8 @@ def remove_post(session, file_abs_path=None, post=None, auto_commit=True):
         logger.info(f"Post not found in database: {file_abs_path}")
         return
     logger.info(f"Removing post: {post.file_path}.{post.extension}")
+    if not file_abs_path:
+        return
     relative_path = file_abs_path.relative_to(shared.target_dir)
     thumbnails_path = shared.thumbnails_dir / relative_path
     if thumbnails_path.exists():

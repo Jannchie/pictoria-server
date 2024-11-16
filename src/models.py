@@ -2,97 +2,135 @@ from datetime import UTC, datetime
 from typing import List, Optional
 
 from PIL import Image
-from sqlalchemy import Column, Computed, Float, Index, Integer
-from sqlalchemy.ext.declarative import declarative_base
-from sqlmodel import Field, Relationship, Session, SQLModel
+from pydantic import BaseModel
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Computed,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+)
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    MappedAsDataclass,
+    Session,
+    mapped_column,
+    relationship,
+)
 
 import shared
 
-Base = declarative_base()
-SQLModel.metadata = Base.metadata
+
+class Base(DeclarativeBase, MappedAsDataclass):
+    pass
 
 
-class TagGroup(SQLModel, table=True):
+class TagGroup(Base):
     __tablename__ = "tag_groups"
 
-    id: int = Field(default=None, sa_column=Column(Integer, primary_key=True, autoincrement=True))
-    name: str = Field(nullable=False, index=True)
-    color: str = Field(default="#000000")
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, nullable=False, default=None)
+    name: Mapped[str] = mapped_column(String(120), index=True, nullable=False, default="", server_default="")
+    color: Mapped[str] = mapped_column(String(9), nullable=False, default="", server_default="")
 
-    tags: List["Tag"] = Relationship(back_populates="group")
-
-
-class TagBase(SQLModel):
-    count: int = Field(default=0)
+    tags: Mapped[list["Tag"]] = relationship("Tag", back_populates="group", default_factory=list)
 
 
-class Tag(TagBase, table=True):
-    __tablename__ = "tags"
-    name: str = Field(primary_key=True)
-    group: Optional[TagGroup] = Relationship(back_populates="tags")
-    group_id: Optional[int] = Field(default=None, foreign_key="tag_groups.id")
-
-
-class TagPublic(TagBase):
+class TagGroupPublic(BaseModel):
+    id: int
     name: str
-    group_id: Optional[int]
+    color: str
+
+    class Config:
+        from_attributes = True
 
 
-class Folder(SQLModel, table=True):
-    __tablename__ = "folders"
+class TagPublic(BaseModel):
+    name: str
+    count: int
 
-    path: str = Field(primary_key=True)
-    file_count: int = Field(default=0)
+    class Config:
+        from_attributes = True
 
 
-class PostBase(SQLModel):
-    id: int = Field(sa_column=Column(Integer, primary_key=True, autoincrement=True, nullable=False))
-    file_path: str = Field(index=True)
-    file_name: str = Field(index=True)
-    extension: str = Field(index=True)
+class TagGroupWithTagsPublic(TagGroupPublic):
 
-    width: Optional[int] = Field(default=None, index=True)
-    height: Optional[int] = Field(default=None, index=True)
-    aspect_ratio: float = Field(sa_column=Column("aspect_ratio", Float, Computed("width * 1.0 / NULLIF(height, 0)")))
-    # aspect_ratio: Optional[float] = Field(default=None, index=True)
-    score: int = Field(default=0, index=True)
-    rating: int = Field(default=0, index=True)
-    description: Optional[str] = None
-    updated_at: int = Field(
-        nullable=False,
-        index=True,
-        default_factory=lambda: int(datetime.now(UTC).timestamp()),
-        sa_column_kwargs={"onupdate": int(datetime.now(UTC).timestamp())},
+    tags: list["TagPublic"]
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+    name: Mapped[str] = mapped_column(String(120), primary_key=True, nullable=False)
+    group_id: Mapped[int] = mapped_column(ForeignKey("tag_groups.id"), nullable=True, default=None)
+    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    group: Mapped["TagGroup"] = relationship("TagGroup", back_populates="tags", default=None, lazy="select")
+    posts: Mapped[list["PostHasTag"]] = relationship(
+        "PostHasTag", back_populates="tag_info", default_factory=list, lazy="select"
     )
-    created_at: int = Field(
-        nullable=False,
-        index=True,
-        default_factory=lambda: int(datetime.now(UTC).timestamp()),
-    )
-    meta: Optional[str] = Field(sa_column=Column("meta", nullable=False, default="", server_default="", index=True))
-    md5: Optional[str] = Field(sa_column=Column("md5", nullable=False, default="", server_default="", index=True))
-    size: Optional[int] = Field(sa_column=Column("size", nullable=False, default=0, server_default="0", index=True))
-    source: Optional[str] = Field(sa_column=Column("source", nullable=False, default="", server_default="", index=True))
-    caption: str = Field(sa_column=Column("caption", nullable=False, default="", server_default=""))
 
 
-class Post(PostBase, table=True):
+class TagWithGroupPublic(TagPublic):
+    group: TagGroupPublic
+    pass
+
+
+class Post(Base):
     __tablename__ = "posts"
     __table_args__ = (Index("idx_file_path_name_extension", "file_path", "file_name", "extension", unique=True),)
 
-    tags: List["PostHasTag"] = Relationship(back_populates="posts")
+    id: Mapped[Optional[int]] = mapped_column(
+        Integer, primary_key=True, autoincrement=True, nullable=False, default=None
+    )
+    file_path: Mapped[str] = mapped_column(String, index=True, default="")
+    file_name: Mapped[str] = mapped_column(String, index=True, default="")
+    extension: Mapped[str] = mapped_column(String, index=True, default="")
 
-    @property
-    def relative_path(self):
-        return f"{self.file_path}/{self.file_name}.{self.extension}"
+    full_path: Mapped[str] = mapped_column(
+        String,
+        Computed("file_path || '/' || file_name || '.' || extension"),
+        init=False,
+    )
+    aspect_ratio: Mapped[float] = mapped_column(Float, Computed("width * 1.0 / NULLIF(height, 0)"), init=False)
+
+    width: Mapped[Optional[int]] = mapped_column(Integer, nullable=False, index=True, default=0, server_default="0")
+    height: Mapped[Optional[int]] = mapped_column(Integer, nullable=False, index=True, default=0, server_default="0")
+
+    updated_at: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True,
+        default_factory=lambda: int(datetime.now(UTC).timestamp()),
+        onupdate=int(datetime.now(UTC).timestamp()),
+    )
+    created_at: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True,
+        default_factory=lambda: int(datetime.now(UTC).timestamp()),
+    )
+    score: Mapped[int] = mapped_column(Integer, default=0, index=True, server_default="0")
+    rating: Mapped[int] = mapped_column(Integer, default=0, index=True, server_default="0")
+
+    description: Mapped[str] = mapped_column(String, nullable=False, default="", server_default="")
+    meta: Mapped[str] = mapped_column(String, nullable=False, default="", server_default="", index=True)
+    md5: Mapped[str] = mapped_column(String, nullable=False, default="", server_default="", index=True)
+    size: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", index=True)
+    source: Mapped[str] = mapped_column(String, nullable=False, default="", server_default="", index=True)
+    caption: Mapped[str] = mapped_column(String, nullable=False, default="", server_default="")
+    tags: Mapped[list["PostHasTag"]] = relationship(
+        "PostHasTag", back_populates="post", default_factory=list, lazy="select"
+    )
 
     @property
     def absolute_path(self):
-        return f"{shared.target_dir}/{self.relative_path}"
+        return f"{shared.target_dir}/{self.full_path}"
 
     @property
     def thumbnail_path(self):
-        return f"{shared.thumbnails_dir}/{self.relative_path}"
+        return f"{shared.thumbnails_dir}/{self.full_path}"
 
     def rotate(self, session: Session, clockwise: bool = True):
         from utils import calculate_md5, create_thumbnail_by_image
@@ -109,22 +147,48 @@ class Post(PostBase, table=True):
         session.refresh(self)
 
 
-class PostHasTagBase(SQLModel):
-    post_id: int = Field(foreign_key="posts.id", primary_key=True)
-    tag_name: str = Field(foreign_key="tags.name", primary_key=True)
-    is_auto: bool = Field(default=False)
-
-
-class PostHasTag(PostHasTagBase, table=True):
+class PostHasTag(Base):
     __tablename__ = "post_has_tag"
-    posts: "Post" = Relationship(back_populates="tags")
-    tag_info: "Tag" = Relationship()
+
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True)
+    tag_name: Mapped[str] = mapped_column(ForeignKey("tags.name"), primary_key=True)
+
+    post: Mapped["Post"] = relationship("Post", back_populates="tags", lazy="select", default=None)
+    tag_info: Mapped["Tag"] = relationship("Tag", back_populates="posts", lazy="select", default=None)
+    is_auto: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
-class PostHasTagPublic(SQLModel):
+class PostHasTagPublic(BaseModel):
     is_auto: bool
-    tag_info: TagPublic
+    tag_info: TagWithGroupPublic
+
+    class Config:
+        from_attributes = True
 
 
-class PostWithTag(PostBase):
-    tags: List[PostHasTagPublic] = []
+class PostPublic(BaseModel):
+    id: int
+    file_path: str
+    file_name: str
+    extension: str
+    full_path: str
+    width: Optional[int]
+    height: Optional[int]
+    aspect_ratio: Optional[float]
+    updated_at: int
+    created_at: int
+    score: int
+    rating: int
+    description: str
+    meta: str
+    md5: str
+    size: int
+    source: str
+    caption: str
+
+    class Config:
+        from_attributes = True
+
+
+class PostWithTagPublic(PostPublic):
+    tags: list[PostHasTagPublic]

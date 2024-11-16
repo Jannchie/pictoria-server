@@ -39,3 +39,10 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch" }
 torchvision = { index = "pytorch" }
+
+[tool.pyright]
+reportAssignmentType = "none"
+reportArgumentType = "none"
+
+[tool.uv]
+package = true

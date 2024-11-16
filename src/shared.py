@@ -10,9 +10,9 @@ from ai import OpenAIImageAnnotator
 
 db_path: None | Path = None
 
-target_dir: None | Path = None
-pictoria_dir: None | Path = None
-thumbnails_dir: None | Path = None
+target_dir: Path = Path()
+pictoria_dir: Path = Path()
+thumbnails_dir: Path = Path()
 
 should_watch = True
 stop_event = threading.Event()
