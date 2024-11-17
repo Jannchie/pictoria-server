@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from PIL import Image
 from rich.progress import Progress
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, insert, select
 from sqlalchemy.orm import Session, sessionmaker
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -99,14 +99,15 @@ def validate_path(target_path):
 
 def get_target_dir(args):
     target_dir_str = args.target_dir
-    logger.info(f'Target path: "{target_dir_str}"')
     target_dir = Path(target_dir_str).resolve()
     validate_path(target_dir)
+    logger.info(f"Target directory: {target_dir}")
     return target_dir
 
 
 def get_db_path():
     db_path = shared.pictoria_dir / "metadata.db"
+    logger.info(f"Database path: {db_path}")
     logger.info(f"Using database file: {db_path}")
     return db_path
 
@@ -120,6 +121,7 @@ def execute_database_migration():
 
 def init_thumbnails_directory():
     shared.thumbnails_dir = shared.pictoria_dir / "thumbnails"
+    logger.info(f"Thumbnails directory: {shared.thumbnails_dir}")
     if not shared.thumbnails_dir.exists():
         shared.thumbnails_dir.mkdir()
         logger.info(f'Created directory "{shared.thumbnails_dir}"')
@@ -284,7 +286,15 @@ def get_path_name_and_extension(file_path: Path) -> tuple[str, str, str]:
     return path, name, ext
 
 
-def process_post(session, file_abs_path: Optional[Path] = None, post: Optional[Post] = None):
+process_post_lock = threading.Lock()
+
+
+def process_post(session: Session, file_abs_path: Optional[Path] = None, post: Optional[Post] = None):
+    with process_post_lock:
+        _process_post(session, file_abs_path, post)
+
+
+def _process_post(session: Session, file_abs_path: Optional[Path] = None, post: Optional[Post] = None):
     if post is None:
         file_path, file_name, extension = get_path_name_and_extension(file_abs_path)
         post = (
@@ -294,6 +304,9 @@ def process_post(session, file_abs_path: Optional[Path] = None, post: Optional[P
         )
     if post is None:
         logger.info(f"Post not found in database: {file_abs_path}")
+        return
+    if post.md5:
+        logger.info(f"Skipping post: {file_abs_path}")
         return
     file_data = None
     try:
@@ -309,7 +322,7 @@ def process_post(session, file_abs_path: Optional[Path] = None, post: Optional[P
         ]:
             logger.debug(f"Skipping file: {file_abs_path}")
             return
-        logger.debug(f"Processing file: {file_abs_path}")
+        logger.info(f"Processing post: {file_abs_path}")
         with file_abs_path.open("rb") as file:
             file_data = file.read()
             file.seek(0)  # 重置文件指针位置
@@ -323,7 +336,7 @@ def process_post(session, file_abs_path: Optional[Path] = None, post: Optional[P
             update_file_metadata(file_data, post, file_abs_path, session)
 
 
-def update_file_metadata(file_data, post, file_abs_path, session):
+def update_file_metadata(file_data: bytes, post: Post, file_abs_path: Path, session: Session):
     post.md5 = calculate_md5(file_data)
     post.size = file_abs_path.stat().st_size
 
@@ -421,7 +434,6 @@ class Handler(FileSystemEventHandler):
         self.debounce_time = debounce_time
         self.lock = threading.Lock()
         self.engine = create_engine(f"sqlite:///{shared.db_path}", echo=False)
-        self.session = get_session(self.engine)
 
     def on_any_event(self, event):
 
@@ -499,44 +511,52 @@ def attach_tags_to_post(session: Session, post: Post, resp: wdtagger.Result, is_
         "character": "#8243ca",
     }
     for tag_group_name in group_names:
-        tag_group = session.query(TagGroup).filter(TagGroup.name == tag_group_name).first()
+        tag_group = session.scalar(select(TagGroup).where(TagGroup.name == tag_group_name))
         if tag_group is None:
             tag_group = TagGroup(name=tag_group_name, color=colors[tag_group_name])
             session.add(tag_group)
-            session.commit()  # 立即提交，以确保后续查询能找到新创建的 TagGroup
-
+    print(resp.general_tags, resp.character_tags)
     # 遍历标签并进行处理
-    for i, tags in enumerate([resp.general_tags, resp.character_tags]):
+    for i, tag_names in enumerate([resp.general_tags, resp.character_tags]):
         name = group_names[i]
         tag_group = session.execute(select(TagGroup).where(TagGroup.name == name)).scalar_one()
-        existing_tag_records = {
-            tag_record.tag_name
-            for tag_record in session.scalars(
-                select(PostHasTag).filter(PostHasTag.tag_name.in_(tags) & (PostHasTag.post_id == post.id))
-            ).all()
-        }
-        new_tags = set(tags) - existing_tag_records
 
-        # 如果已有的 tag 不属于任何 tag group，则将其放到相应的 tag_group 中
-        for tag_name in existing_tag_records:
-            tag = session.get(Tag, tag_name)
-            if tag and tag.group_id is None:
-                tag.group_id = tag_group.id
-                session.add(tag)
+        existing_tags = session.scalars(select(Tag).where(Tag.name.in_(tag_names))).all()
+        existing_tag_names = {tag.name for tag in existing_tags}
+        for existing_tag in existing_tags:
+            if not existing_tag.group_id:
+                existing_tag.group_id = tag_group.id
+                session.add(existing_tag)
+        if new_tags := set(tag_names) - existing_tag_names:
+            session.execute(
+                insert(Tag).values(
+                    [
+                        {
+                            "name": tag_name,
+                            "group_id": tag_group.id,
+                        }
+                        for tag_name in new_tags
+                    ]
+                )
+            )
 
-        # 插入新标签，确保其唯一性
-        for tag_name in new_tags:
-            existing_tag = session.query(Tag).filter(Tag.name == tag_name).first()
-            if existing_tag is None:
-                new_tag = Tag(name=tag_name, group_id=tag_group.id)
-                session.add(new_tag)
+        post_existing_tags = session.scalars(
+            select(PostHasTag).where(PostHasTag.tag_name.in_(tag_names) & (PostHasTag.post_id == post.id))
+        ).all()
+        post_existing_tag_names = {tag_record.tag_name for tag_record in post_existing_tags}
+        if post_new_tags := set(tag_names) - post_existing_tag_names:
+            session.execute(
+                insert(PostHasTag).values(
+                    [
+                        {
+                            "post_id": post.id,
+                            "tag_name": tag_name,
+                            "is_auto": is_auto,
+                        }
+                        for tag_name in post_new_tags
+                    ]
+                )
+            )
 
-        # 添加标签关联
-        for tag_name in tags:
-            if tag_name in existing_tag_records:
-                continue
-            post_has_tag = PostHasTag(post_id=post.id, tag_name=tag_name, is_auto=is_auto)
-            session.add(post_has_tag)
-
-    # 提交更改
+    session.add(post)
     session.commit()

@@ -8,7 +8,8 @@ from typing import Annotated, Optional
 import fastapi
 import httpx
 import uvicorn
-from fastapi import Body, Depends, File, Form, HTTPException, Path, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Path, UploadFile
+from fastapi.concurrency import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, Field
@@ -29,10 +30,7 @@ from models import (
     PostWithTagPublic,
     Tag,
     TagGroup,
-    TagGroupPublic,
     TagGroupWithTagsPublic,
-    TagPublic,
-    TagWithGroupPublic,
 )
 from utils import (
     attach_tags_to_post,
@@ -43,6 +41,7 @@ from utils import (
     initialize,
     logger,
     parse_arguments,
+    process_post,
     process_posts,
     sync_metadata,
     use_route_names_as_operation_ids,
@@ -51,8 +50,23 @@ from utils import (
 
 pyproject = tomllib.load(open("pyproject.toml", "rb"))
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    args = parse_arguments()
+    initialize(args)
+    sync_metadata()
+    watch_target_dir()
+    host = args.host or "localhost"
+    doc_url = f"http://{host}:{args.port}/docs"
+    shared.logger.info(f"API Document: {doc_url}")
+    yield
+
+
 console = get_console()
-app = fastapi.FastAPI(default_response_class=ORJSONResponse, title="Pictoria", version=pyproject["project"]["version"])
+app = fastapi.FastAPI(
+    default_response_class=ORJSONResponse, title="Pictoria", version=pyproject["project"]["version"], lifespan=lifespan
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -352,19 +366,20 @@ def v1_update_tag(tag_name: str, new_tag_name: str):
 @app.post("/v1/posts/{post_id}/tags/{tag_name}", response_model=PostWithTagPublic, tags=["Tag"])
 def v1_add_tag_to_post(post_id: int, tag_name: str):
     session = get_session()
-    post = session.query(Post).filter(Post.id == post_id).first()
+    post = session.get(Post, post_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
-    tag = session.query(Tag).filter(Tag.name == tag_name).first()
+    tag = session.get(Tag, tag_name)
     # 如果 tag 不存在，创建一个新的 tag
     if tag is None:
         tag = Tag(name=tag_name)
         session.add(tag)
 
     # 如果已经存在，直接返回
-    post_has_tag = (
-        session.query(PostHasTag).filter(PostHasTag.post_id == post_id, PostHasTag.tag_name == tag_name).first()
-    )
+    # post_has_tag = (
+    #     session.query(PostHasTag).filter(PostHasTag.post_id == post_id, PostHasTag.tag_name == tag_name).first()
+    # )
+    post_has_tag = session.get(PostHasTag, (post_id, tag_name))
     if post_has_tag is None:
         postHasTag = PostHasTag(post_id=post_id, tag_name=tag_name)
         session.add(postHasTag)
@@ -408,7 +423,7 @@ def v1_cmd_auto_tags(post_id: int):
     abs_path = post.absolute_path
     tagger = shared.tagger if shared.tagger is not None else Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3")
     resp = tagger.tag(abs_path)
-    shared.logger.info(resp)
+    logger.info(resp)
     post.rating = from_rating_to_int(resp.rating)
     attach_tags_to_post(session, post, resp, is_auto=True)
     session.commit()
@@ -549,21 +564,23 @@ def v1_upload_file(
 
     if path is None and file is not None and file.filename:
         path = file.filename
+    elif path and file is not None and file.filename:
+        path = f"{path}/{file.filename}"
     else:
         path = path or (url.split("/")[-1] if url else "")
-
     abs_path = shared.target_dir / path
     abs_path.parent.mkdir(parents=True, exist_ok=True)
     file_path, file_name, file_ext = get_path_name_and_extension(abs_path)
-    logger.info(f"Saving file to: {abs_path}")
     if abs_path.exists():
         raise HTTPException(status_code=400, detail="File already exists")
+    logger.info(f"Saving file to: {abs_path}")
     post = Post(file_path=file_path, file_name=file_name, extension=file_ext, source=source)
     session = get_session()
     session.add(post)
     session.commit()
     with open(abs_path, "wb") as f:
         shutil.copyfileobj(file_io, f)
+    process_post(session, abs_path, post)
     return ORJSONResponse(content={"filename": path})
 
 
@@ -588,11 +605,7 @@ use_route_names_as_operation_ids(app)
 if __name__ == "__main__":
     args = parse_arguments()
     initialize(args)
-    sync_metadata()
-    watch_target_dir()
     host = args.host or "localhost"
-    doc_url = f"http://{host}:{args.port}/docs"
-    shared.logger.info(f"API Document: {doc_url}")
     uvicorn.run(
         "main:app",
         host=host,

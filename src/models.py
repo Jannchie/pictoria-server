@@ -1,18 +1,9 @@
 from datetime import UTC, datetime
-from typing import List, Optional
+from typing import Optional
 
 from PIL import Image
 from pydantic import BaseModel
-from sqlalchemy import (
-    Boolean,
-    Column,
-    Computed,
-    Float,
-    ForeignKey,
-    Index,
-    Integer,
-    String,
-)
+from sqlalchemy import Boolean, Computed, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -36,7 +27,7 @@ class TagGroup(Base):
     name: Mapped[str] = mapped_column(String(120), index=True, nullable=False, default="", server_default="")
     color: Mapped[str] = mapped_column(String(9), nullable=False, default="", server_default="")
 
-    tags: Mapped[list["Tag"]] = relationship("Tag", back_populates="group", default_factory=list)
+    tags: Mapped[list["Tag"]] = relationship(back_populates="group", default_factory=list)
 
 
 class TagGroupPublic(BaseModel):
@@ -65,10 +56,10 @@ class Tag(Base):
     __tablename__ = "tags"
     name: Mapped[str] = mapped_column(String(120), primary_key=True, nullable=False)
     group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tag_groups.id"), nullable=True, default=None)
-    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    group: Mapped[Optional["TagGroup"]] = relationship("TagGroup", back_populates="tags", default=None, lazy="select")
+    group: Mapped[Optional["TagGroup"]] = relationship(back_populates="tags", lazy="select", init=False)
+    count: Mapped[int] = mapped_column(Integer, server_default="0", default=0, nullable=False, init=False)
     posts: Mapped[list["PostHasTag"]] = relationship(
-        "PostHasTag", back_populates="tag_info", default_factory=list, lazy="select"
+        back_populates="tag_info", default_factory=list, lazy="select", init=False
     )
 
 
@@ -80,7 +71,7 @@ class Post(Base):
     __tablename__ = "posts"
     __table_args__ = (Index("idx_file_path_name_extension", "file_path", "file_name", "extension", unique=True),)
 
-    id: Mapped[Optional[int]] = mapped_column(Integer, primary_key=True, autoincrement=True, nullable=False, init=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, nullable=False, init=False)
     file_path: Mapped[str] = mapped_column(String, index=True, default="")
     file_name: Mapped[str] = mapped_column(String, index=True, default="")
     extension: Mapped[str] = mapped_column(String, index=True, default="")
@@ -117,9 +108,7 @@ class Post(Base):
     size: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", index=True)
     source: Mapped[str] = mapped_column(String, nullable=False, default="", server_default="", index=True)
     caption: Mapped[str] = mapped_column(String, nullable=False, default="", server_default="")
-    tags: Mapped[list["PostHasTag"]] = relationship(
-        "PostHasTag", back_populates="post", default_factory=list, lazy="select"
-    )
+    tags: Mapped[list["PostHasTag"]] = relationship(back_populates="post", default_factory=list, lazy="select")
 
     @property
     def absolute_path(self):
@@ -149,10 +138,10 @@ class PostHasTag(Base):
 
     post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True)
     tag_name: Mapped[str] = mapped_column(ForeignKey("tags.name"), primary_key=True)
-
-    post: Mapped["Post"] = relationship("Post", back_populates="tags", lazy="select", init=False)
-    tag_info: Mapped["Tag"] = relationship("Tag", back_populates="posts", lazy="select", init=False)
     is_auto: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    post: Mapped["Post"] = relationship(back_populates="tags", lazy="select", init=False)
+    tag_info: Mapped["Tag"] = relationship(back_populates="posts", lazy="select", init=False)
 
 
 class PostHasTagPublic(BaseModel):
