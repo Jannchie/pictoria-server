@@ -1,3 +1,4 @@
+import os
 from datetime import UTC, datetime
 from typing import Optional
 
@@ -128,6 +129,37 @@ class Post(Base):
         file_data = image.tobytes()
         self.md5 = calculate_md5(file_data)
         self.width, self.height = image.size
+        self.commit(session)
+
+    def move(self, session: Session, new_path: str):
+        def move_file(src: str, dst: str):
+            if os.path.isdir(src):
+                if not os.path.exists(dst):
+                    os.makedirs(dst)
+
+                # Iterate over all files and directories in the source directory
+                for item in os.listdir(src):
+                    s = os.path.join(src, item)
+                    d = os.path.join(dst, item)
+                    # Recursively call move_file for subdirectories and files
+                    move_file(s, d)
+
+                # Remove the source directory after its contents have been moved
+                os.rmdir(src)
+            else:
+                if not os.path.exists(os.path.dirname(dst)):
+                    os.makedirs(os.path.dirname(dst))
+                os.rename(src, dst)
+
+        new_path = new_path.strip("/")
+        new_full_path = f"{new_path}/{self.file_name}.{self.extension}"
+        new_thumbnail_path = f"{shared.thumbnails_dir}/{new_full_path}"
+        move_file(self.absolute_path, f"{shared.target_dir}/{new_full_path}")
+        move_file(self.thumbnail_path, new_thumbnail_path)
+        self.file_path = new_path
+        self.commit(session)
+
+    def commit(self, session: Session):
         session.add(self)
         session.commit()
         session.refresh(self)

@@ -189,7 +189,11 @@ def _sync_metadata():
     process_posts()
 
 
-def get_session(engine=None):
+engine = None
+
+
+def get_session():
+    global engine
     if engine is None:
         engine = create_engine(f"sqlite:///{shared.db_path}", echo=False)
     Session = sessionmaker(bind=engine)
@@ -451,7 +455,7 @@ class Handler(FileSystemEventHandler):
             self.last_event_times[event_key] = current_time
 
         try:
-            session = get_session(self.engine)
+            session = get_session()
             if event.event_type == "created":
                 logger.debug(f"Received created event - {event.src_path}")
                 process_post(session, Path(event.src_path))

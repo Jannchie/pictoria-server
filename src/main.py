@@ -407,6 +407,15 @@ def v1_get_tag_groups(session: Session = Depends(get_session)):
     return session.scalars(select(TagGroup))
 
 
+@app.put("/v1/posts/move", response_model=PostWithTagPublic, tags=["Post"])
+def v1_move_posts(post_ids: list[int], new_path: str, session: Session = Depends(get_session)):
+    for post_id in post_ids:
+        post = session.get(Post, post_id)
+        if post is None:
+            raise HTTPException(status_code=404, detail="Post not found")
+        post.move(session, new_path)
+
+
 @app.post("/v1/cmd/process-posts", tags=["Command"])
 def v1_cmd_process_posts():
     process_posts(True)
