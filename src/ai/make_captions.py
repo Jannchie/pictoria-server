@@ -1,7 +1,8 @@
 import base64
-import json
 from io import BytesIO
+from pathlib import Path
 
+import PIL.Image
 from diffusers.utils.loading_utils import load_image
 from openai import OpenAI
 from rich import get_console
@@ -11,16 +12,17 @@ console = get_console()
 
 
 class BaseAnnotator:
-    def annotate_image(self, image_path):
-        raise NotImplementedError(f"Annotating the image at: {image_path}")
+    def annotate_image(self, image_path: Path) -> str:
+        msg = f"Annotating the image at: {image_path}"
+        raise NotImplementedError(msg)
 
 
 class WDTaggerAnnotator(BaseAnnotator):
-    def __init__(self):
+    def __init__(self) -> None:
         self.tagger = Tagger()
 
-    def annotate_image(self, image_path):
-        image = load_image(image_path)
+    def annotate_image(self, image_path: Path) -> str:
+        image = load_image(image_path.as_posix())
         tagger_resp = self.tagger.tag(image)
         return tagger_resp.all_tags_string
 
@@ -28,35 +30,18 @@ class WDTaggerAnnotator(BaseAnnotator):
 class OpenAIImageAnnotator(BaseAnnotator):
     MODEL = "gpt-4o-mini"
 
-    def __init__(self, api_key):
+    def __init__(self, api_key: str) -> None:
         self.client = OpenAI(api_key=api_key)
 
-    def load_and_process_image(self, image_path):
-        return load_image(image_path)
+    def load_and_process_image(self, image_path: Path) -> PIL.Image.Image:
+        return load_image(image_path.as_posix())
 
-    def get_img_base64(self, image):
+    def get_img_base64(self, image: PIL.Image.Image) -> str:
         buffered = BytesIO()
         image.save(buffered, format="JPEG")  # Change format as needed
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-    def calculate_cost(self, response):
-        usage = response.usage
-        price_per_token = {
-            "gpt-4o-mini": {
-                "prompt_tokens": 0.15 / 1_000_000,
-                "response_tokens": 0.6 / 1_000_000,
-            },
-            "gpt-4o": {
-                "prompt_tokens": 5 / 1_000_000,
-                "response_tokens": 15 / 1_000_000,
-            },
-        }
-        return (
-            usage.prompt_tokens * price_per_token[self.MODEL]["prompt_tokens"]
-            + usage.completion_tokens * price_per_token[self.MODEL]["response_tokens"]
-        )
-
-    def annotate_image(self, image_path) -> dict:
+    def annotate_image(self, image_path: Path) -> str:
         image = self.load_and_process_image(image_path)
         base64_image = self.get_img_base64(image)
 
@@ -70,11 +55,11 @@ class OpenAIImageAnnotator(BaseAnnotator):
                             "type": "text",
                             "text": (
                                 "Create a caption for the image "
-                                "using natural language. Your tags and caption need to be as specific as possible and "
+                                "using natural language. Your caption need to be as specific as possible and "
                                 "should be distinguishable from other images. Not only should you include the content "
                                 "and elements, but you should also cover aspects such as composition, art style, type, "
-                                "color, structure, etc. I will use your output to label training data. The response "
-                                "should be json format, with the key 'caption'."
+                                "color, structure, etc. I will use your output to label training data. "
+                                "The caption should shorter than 60 words."
                             ),
                         },
                         {
@@ -85,14 +70,13 @@ class OpenAIImageAnnotator(BaseAnnotator):
                             },
                         },
                     ],
-                }
+                },
             ],
-            response_format={"type": "json_object"},
-            max_tokens=500,
+            max_tokens=200,
         )
-
-        content = response.choices[0].message.content
-        return json.loads(content)
+        if response.choices[0].message.content is None:
+            return ""
+        return response.choices[0].message.content
 
 
 if __name__ == "__main__":
