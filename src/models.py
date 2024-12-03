@@ -1,9 +1,10 @@
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Optional
 
+import pydantic
 from PIL import Image
-from pydantic import BaseModel
 from sqlalchemy import Boolean, Computed, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -17,7 +18,10 @@ from sqlalchemy.orm import (
 import shared
 
 
-class Base(DeclarativeBase, MappedAsDataclass):
+class Base(
+    DeclarativeBase,
+    MappedAsDataclass,
+):
     pass
 
 
@@ -31,41 +35,18 @@ class TagGroup(Base):
     tags: Mapped[list["Tag"]] = relationship(back_populates="group", default_factory=list)
 
 
-class TagGroupPublic(BaseModel):
-    id: int
-    name: str
-    color: str
-
-    class Config:
-        from_attributes = True
-
-
-class TagPublic(BaseModel):
-    name: str
-    count: int
-
-    class Config:
-        from_attributes = True
-
-
-class TagGroupWithTagsPublic(TagGroupPublic):
-
-    tags: list["TagPublic"]
-
-
 class Tag(Base):
     __tablename__ = "tags"
     name: Mapped[str] = mapped_column(String(120), primary_key=True, nullable=False)
-    group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tag_groups.id"), nullable=True, default=None)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("tag_groups.id"), nullable=True, default=None)
     group: Mapped[Optional["TagGroup"]] = relationship(back_populates="tags", lazy="select", init=False)
     count: Mapped[int] = mapped_column(Integer, server_default="0", default=0, nullable=False, init=False)
     posts: Mapped[list["PostHasTag"]] = relationship(
-        back_populates="tag_info", default_factory=list, lazy="select", init=False
+        back_populates="tag_info",
+        default_factory=list,
+        lazy="select",
+        init=False,
     )
-
-
-class TagWithGroupPublic(TagPublic):
-    group: Optional[TagGroupPublic]
 
 
 class Post(Base):
@@ -84,8 +65,8 @@ class Post(Base):
     )
     aspect_ratio: Mapped[float] = mapped_column(Float, Computed("width * 1.0 / NULLIF(height, 0)"), init=False)
 
-    width: Mapped[Optional[int]] = mapped_column(Integer, nullable=False, index=True, default=0, server_default="0")
-    height: Mapped[Optional[int]] = mapped_column(Integer, nullable=False, index=True, default=0, server_default="0")
+    width: Mapped[int | None] = mapped_column(Integer, nullable=False, index=True, default=0, server_default="0")
+    height: Mapped[int | None] = mapped_column(Integer, nullable=False, index=True, default=0, server_default="0")
 
     updated_at: Mapped[int] = mapped_column(
         Integer,
@@ -112,14 +93,14 @@ class Post(Base):
     tags: Mapped[list["PostHasTag"]] = relationship(back_populates="post", default_factory=list, lazy="select")
 
     @property
-    def absolute_path(self):
-        return f"{shared.target_dir}/{self.full_path}"
+    def absolute_path(self) -> Path:
+        return shared.target_dir / self.full_path
 
     @property
-    def thumbnail_path(self):
-        return f"{shared.thumbnails_dir}/{self.full_path}"
+    def thumbnail_path(self) -> Path:
+        return shared.thumbnails_dir / self.full_path
 
-    def rotate(self, session: Session, clockwise: bool = True):
+    def rotate(self, session: Session, *, clockwise: bool = True) -> None:
         from utils import calculate_md5, create_thumbnail_by_image
 
         image = Image.open(self.absolute_path)
@@ -131,35 +112,36 @@ class Post(Base):
         self.width, self.height = image.size
         self.commit(session)
 
-    def move(self, session: Session, new_path: str):
-        def move_file(src: str, dst: str):
-            if os.path.isdir(src):
-                if not os.path.exists(dst):
-                    os.makedirs(dst)
+    def move(self, session: Session, new_path: str) -> None:
+        def move_file(src: Path, dst: Path) -> None:
+            if src.is_dir():
+                if not dst.exists():
+                    dst.mkdir(parents=True, exist_ok=True)
 
                 # Iterate over all files and directories in the source directory
                 for item in os.listdir(src):
-                    s = os.path.join(src, item)
-                    d = os.path.join(dst, item)
+                    s = src / item
+                    d = dst / item
                     # Recursively call move_file for subdirectories and files
                     move_file(s, d)
 
                 # Remove the source directory after its contents have been moved
-                os.rmdir(src)
+                src.rmdir()
             else:
-                if not os.path.exists(os.path.dirname(dst)):
-                    os.makedirs(os.path.dirname(dst))
-                os.rename(src, dst)
+                if not dst.parent.exists():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                src.replace(dst)
 
         new_path = new_path.strip("/")
-        new_full_path = f"{new_path}/{self.file_name}.{self.extension}"
-        new_thumbnail_path = f"{shared.thumbnails_dir}/{new_full_path}"
-        move_file(self.absolute_path, f"{shared.target_dir}/{new_full_path}")
+        new_full_path = Path(new_path) / self.file_name
+        new_full_path = new_full_path.with_suffix(self.extension)
+        new_thumbnail_path = shared.thumbnails_dir / new_full_path
+        move_file(self.absolute_path, shared.target_dir / new_full_path)
         move_file(self.thumbnail_path, new_thumbnail_path)
         self.file_path = new_path
         self.commit(session)
 
-    def commit(self, session: Session):
+    def commit(self, session: Session) -> None:
         session.add(self)
         session.commit()
         session.refresh(self)
@@ -174,39 +156,3 @@ class PostHasTag(Base):
 
     post: Mapped["Post"] = relationship(back_populates="tags", lazy="select", init=False)
     tag_info: Mapped["Tag"] = relationship(back_populates="posts", lazy="select", init=False)
-
-
-class PostHasTagPublic(BaseModel):
-    is_auto: bool
-    tag_info: TagWithGroupPublic
-
-    class Config:
-        from_attributes = True
-
-
-class PostPublic(BaseModel):
-    id: int
-    file_path: str
-    file_name: str
-    extension: str
-    full_path: str
-    width: Optional[int]
-    height: Optional[int]
-    aspect_ratio: Optional[float]
-    updated_at: int
-    created_at: int
-    score: int
-    rating: int
-    description: str
-    meta: str
-    md5: str
-    size: int
-    source: str
-    caption: str
-
-    class Config:
-        from_attributes = True
-
-
-class PostWithTagPublic(PostPublic):
-    tags: list[PostHasTagPublic]
