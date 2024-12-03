@@ -3,7 +3,7 @@ import os
 import pathlib
 import shutil
 import tomllib
-from typing import Annotated, Optional
+from typing import Annotated
 
 import fastapi
 import httpx
@@ -23,15 +23,8 @@ from wdtagger import Tagger
 
 import shared
 from ai import OpenAIImageAnnotator
-from models import (
-    Post,
-    PostHasTag,
-    PostPublic,
-    PostWithTagPublic,
-    Tag,
-    TagGroup,
-    TagGroupWithTagsPublic,
-)
+from models import Post, PostHasTag, Tag, TagGroup
+from scheme import PostPublic, PostWithTagPublic, TagGroupWithTagsPublic
 from utils import (
     attach_tags_to_post,
     delete_by_file_path_and_ext,
@@ -48,7 +41,8 @@ from utils import (
     watch_target_dir,
 )
 
-pyproject = tomllib.load(open("pyproject.toml", "rb"))
+with pathlib.Path("pyproject.toml").open("rb") as f:
+    pyproject = tomllib.load(f)
 
 
 @asynccontextmanager
@@ -65,7 +59,10 @@ async def lifespan(_: FastAPI):
 
 console = get_console()
 app = fastapi.FastAPI(
-    default_response_class=ORJSONResponse, title="Pictoria", version=pyproject["project"]["version"], lifespan=lifespan
+    default_response_class=ORJSONResponse,
+    title="Pictoria",
+    version=pyproject["project"]["version"],
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -93,23 +90,23 @@ class PathConvertor(Convertor):
 register_url_convertor("pathlike", PathConvertor())
 
 
-def get_post_by_id(post_id, session) -> PostWithTagPublic:
+def get_post_by_id(post_id: int, session: Session):
     post = session.get(
-        Post, post_id, options=[joinedload(Post.tags).joinedload(PostHasTag.tag_info).joinedload(Tag.group)]
+        Post,
+        post_id,
+        options=[joinedload(Post.tags).joinedload(PostHasTag.tag_info).joinedload(Tag.group)],
     )
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
-    for tag in post.tags:
-        assert isinstance(tag, PostHasTag)
     return post
 
 
 class PostFilter(BaseModel):
-    rating: Optional[list[int]] = []
-    score: Optional[list[int]] = []
-    tags: Optional[list[str]] = []
-    extension: Optional[list[str]] = []
-    folder: Optional[str] = None
+    rating: list[int] | None = []
+    score: list[int] | None = []
+    tags: list[str] | None = []
+    extension: list[str] | None = []
+    folder: str | None = None
 
 
 @app.post(
@@ -118,14 +115,21 @@ class PostFilter(BaseModel):
     tags=["Post"],
 )
 def v1_list_posts(
+    *,
     limit: int | None = None,
     offset: int = 0,
-    filter: PostFilter = PostFilter(),
+    filter: PostFilter = PostFilter(),  # noqa: A002
+    ascending: bool = False,
 ):
 
     session = get_session()
-    stmt = apply_filtered_query(filter, select(Post)).limit(limit).offset(offset)
-    return session.scalars(stmt).unique().all()
+    stmt = (
+        apply_filtered_query(filter, select(Post))
+        .order_by(Post.id.asc() if ascending else Post.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return session.scalars(stmt)
 
 
 @app.delete("/v1/posts/{post_id}", tags=["Post"])
@@ -136,10 +140,9 @@ def v1_delete_post(post_id: int):
         raise HTTPException(status_code=404, detail="Post not found")
     delete_by_file_path_and_ext(session=session, path_name_and_ext=[post.file_path, post.file_name, post.extension])
     session.commit()
-    return
 
 
-def apply_filtered_query(filter: PostFilter, stmt: Select) -> Select:
+def apply_filtered_query(filter: PostFilter, stmt: Select) -> Select:  # noqa: A002
     if filter.rating:
         stmt = stmt.filter(Post.rating.in_(filter.rating))
     if filter.score:
@@ -171,7 +174,7 @@ class RatingCountResponse(BaseModel):
 
 @app.post("/v1/posts/count/rating", response_model=list[RatingCountResponse], tags=["Post"])
 def v1_count_group_by_rating(
-    filter: PostFilter = Body(...),
+    filter: PostFilter = Body(...),  # noqa: A002
     session: Session = Depends(get_session),
 ):
 
@@ -188,8 +191,8 @@ class ScoreCountResponse(BaseModel):
 
 @app.post("/v1/posts/count/score", response_model=list[ScoreCountResponse], tags=["Post"])
 def v1_count_group_by_score(
-    filter: PostFilter = Body(...),
-    session: Session = Depends(get_session),
+    session: Annotated[Session, Depends(get_session)],
+    filter: Annotated[PostFilter, Body(...)],  # noqa: A002
 ):
     query = apply_filtered_query(filter, select(Post.score, func.count()).group_by(Post.score))
     resp = session.execute(query).all()
@@ -203,8 +206,8 @@ class ExtensionCountResponse(BaseModel):
 
 @app.post("/v1/posts/count/extension", response_model=list[ExtensionCountResponse], tags=["Post"])
 def v1_count_group_by_extension(
-    filter: PostFilter = Body(...),
-    session: Session = Depends(get_session),
+    session: Annotated[Session, Depends(get_session)],
+    filter: Annotated[PostFilter, Body(...)],  # noqa: A002
 ):
     query = select(Post.extension, func.count()).group_by(Post.extension)
     query = apply_filtered_query(filter, query)
@@ -216,7 +219,7 @@ class ScoreUpdate(BaseModel):
     score: Annotated[int, Field(ge=0, le=5)]
 
 
-@app.put("/v1/posts/{post_id}/score", response_model=PostWithTagPublic, tags=["Post"])
+@app.put("/v1/posts/{post_id}/score", response_model=PostPublic, tags=["Post"])
 def v1_update_post_score(post_id: Annotated[int, Path(gt=0)], score_update: ScoreUpdate):
     session = get_session()
     post = session.query(Post).filter(Post.id == post_id).first()
@@ -235,7 +238,7 @@ class RatingUpdate(BaseModel):
 def v1_update_post_rating(
     post_id: Annotated[int, Path(gt=0)],
     rating_update: RatingUpdate,
-    session: Session = Depends(get_session),
+    session: Annotated[Session, Depends(get_session)],
 ):
     post = session.query(Post).filter(Post.id == post_id).first()
     if not post:
@@ -247,7 +250,11 @@ def v1_update_post_rating(
 
 
 @app.put("/v1/posts/{post_id}/source", response_model=PostPublic, tags=["Post"])
-def v1_update_post_source(post_id: Annotated[int, Path(gt=0)], source: str, session: Session = Depends(get_session)):
+def v1_update_post_source(
+    post_id: Annotated[int, Path(gt=0)],
+    source: str,
+    session: Annotated[Session, Depends(get_session)],
+):
     post = session.get(Post, post_id)
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
@@ -270,13 +277,12 @@ def v1_update_post_caption(post_id: Annotated[int, Path(gt=0)], caption: str):
 
 
 @app.get("/v1/posts/{post_id}", response_model=PostWithTagPublic, tags=["Post"])
-def v1_get_post(post_id: int):
-    session = get_session()
+def v1_get_post(post_id: int, session: Annotated[Session, Depends(get_session)]):
     return get_post_by_id(post_id, session)
 
 
 @app.get("/v1/images/{post_path:pathlike}", tags=["Image"])
-def v1_get_post_by_path(post_path: str):
+def v1_get_post_by_path(post_path: str) -> fastapi.responses.FileResponse:
     if not shared.target_dir:
         raise HTTPException(status_code=400, detail="Target directory is not set")
     abs_path = shared.target_dir / post_path
@@ -284,25 +290,25 @@ def v1_get_post_by_path(post_path: str):
 
 
 @app.get("/v1/thumbnails/{post_path:pathlike}", tags=["Image"])
-def v1_get_thumbnail(post_path: str):
+def v1_get_thumbnail(post_path: str) -> fastapi.responses.FileResponse:
     if not shared.thumbnails_dir:
         raise HTTPException(status_code=400, detail="Thumbnails directory is not set")
     abs_path = shared.thumbnails_dir / post_path
     return fastapi.responses.FileResponse(abs_path)
 
 
-@app.put("/v1/cmd/posts/{post_id}/rotate", response_model=PostWithTagPublic, tags=["Command"])
-def v1_cmd_rotate_image(post_id: int, clockwise: bool = True, session: Session = Depends(get_session)):
+@app.put("/v1/cmd/posts/{post_id}/rotate", response_model=PostPublic, tags=["Command"])
+def v1_cmd_rotate_image(post_id: int, *, clockwise: bool = True, session: Session = Depends(get_session)):
     post = session.get(Post, post_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
-    post.rotate(session, clockwise)
+    post.rotate(session, clockwise=clockwise)
     return post
 
 
 class TagAndGroupIdPublic(BaseModel):
     name: str
-    group_id: Optional[int]
+    group_id: int | None
 
 
 class TagResponse(BaseModel):
@@ -381,8 +387,8 @@ def v1_add_tag_to_post(post_id: int, tag_name: str):
     # )
     post_has_tag = session.get(PostHasTag, (post_id, tag_name))
     if post_has_tag is None:
-        postHasTag = PostHasTag(post_id=post_id, tag_name=tag_name)
-        session.add(postHasTag)
+        post_has_tag = PostHasTag(post_id=post_id, tag_name=tag_name)
+        session.add(post_has_tag)
         session.commit()
     return get_post_by_id(post_id, session)
 
@@ -398,17 +404,16 @@ def v1_remove_tag_from_post(post_id: int, tag_name: str):
     if tag_record is not None:
         session.delete(tag_record)
         session.commit()
-    post = get_post_by_id(post_id, session)
-    return post
+    return get_post_by_id(post_id, session)
 
 
 @app.get("/v1/tag-groups", response_model=list[TagGroupWithTagsPublic], tags=["Tag"])
-def v1_get_tag_groups(session: Session = Depends(get_session)):
+def v1_get_tag_groups(session: Annotated[Session, Depends(get_session)]):
     return session.scalars(select(TagGroup))
 
 
 @app.put("/v1/posts/move", response_model=PostWithTagPublic, tags=["Post"])
-def v1_move_posts(post_ids: list[int], new_path: str, session: Session = Depends(get_session)):
+def v1_move_posts(post_ids: list[int], new_path: str, session: Annotated[Session, Depends(get_session)]):
     for post_id in post_ids:
         post = session.get(Post, post_id)
         if post is None:
@@ -418,14 +423,12 @@ def v1_move_posts(post_ids: list[int], new_path: str, session: Session = Depends
 
 @app.post("/v1/cmd/process-posts", tags=["Command"])
 def v1_cmd_process_posts():
-    process_posts(True)
+    process_posts(all=True)
     return {"status": "ok"}
 
 
 @app.get("/v1/cmd/auto-tags/{post_id}", response_model=PostWithTagPublic, tags=["Command"])
-def v1_cmd_auto_tags(post_id: int):
-    session = get_session()
-    # post = session.query(Post).filter(Post.id == post_id).first()
+def v1_cmd_auto_tags(post_id: int, session: Annotated[Session, Depends(get_session)]):
     post = session.get(Post, post_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
@@ -437,17 +440,14 @@ def v1_cmd_auto_tags(post_id: int):
     attach_tags_to_post(session, post, resp, is_auto=True)
     session.commit()
 
-    post = get_post_by_id(post_id, session)
-    return post
+    return get_post_by_id(post_id, session)
 
 
 @app.get("/v1/cmd/auto-tags", tags=["Command"])
-def v1_cmd_auto_tags_all():
-    session = get_session()
+def v1_cmd_auto_tags_all(session: Annotated[Session, Depends(get_session)]):
     posts = session.query(Post).all()
-    # posts = session.query(Post).filter(~Post.tags.any()).all()
     if shared.tagger is None:
-        shared.tagger = Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3", slient=True)
+        shared.tagger = Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3")
 
     # 使用 rich 进度条
     for post in track(posts, description="Processing posts...", console=console):
@@ -463,7 +463,7 @@ def v1_cmd_auto_tags_all():
     return {"status": "ok"}
 
 
-@app.get("/v1/cmd/auto-caption/{post_id}", response_model=Post, tags=["Command"])
+@app.get("/v1/cmd/auto-caption/{post_id}", response_model=PostPublic, tags=["Command"])
 def v1_cmd_auto_caption(post_id: int):
     session = get_session()
     post: Post = session.query(Post).filter(Post.id == post_id).first()
@@ -473,11 +473,10 @@ def v1_cmd_auto_caption(post_id: int):
     if shared.caption_annotator is None:
         shared.caption_annotator = OpenAIImageAnnotator(shared.openai_key)
 
-    resp = shared.caption_annotator.annotate_image(post.absolute_path)
-    caption = resp.get("caption", "")
-    post.caption = caption
+    post.caption = shared.caption_annotator.annotate_image(post.absolute_path)
+    session.add(post)
     session.commit()
-    post = get_post_by_id(post_id, session)
+    session.refresh(post)
     return post
 
 
@@ -509,22 +508,18 @@ class DirectorySummary(BaseModel):
 DirectorySummary.model_rebuild()
 
 
-def get_directory_summary(path: str) -> DirectorySummary:
-    if not path.startswith(str(shared.target_dir)):
-        path = shared.target_dir / path
-    else:
-        path = pathlib.Path(path).relative_to(shared.target_dir)
-    path = str(path)
-    path = path.replace("\\", "/")
+def get_directory_summary(path_data: str | pathlib.Path) -> DirectorySummary:
+    full_path = pathlib.Path(path_data)
+    relative_path = full_path.relative_to(shared.target_dir)
     summary = DirectorySummary(
-        name=os.path.basename(path),
-        path=path,
+        name=relative_path.name,
+        path=relative_path.as_posix(),
         file_count=0,
         children=[],
     )
 
     ignore_dirs = shared.pictoria_dir
-    with os.scandir(shared.target_dir / path) as entries:
+    with os.scandir(shared.target_dir / path_data) as entries:
         for entry in entries:
             if entry.name == ignore_dirs.name:
                 continue
@@ -540,10 +535,10 @@ def get_directory_summary(path: str) -> DirectorySummary:
 
 @app.get("/v1/folders", response_model=DirectorySummary, tags=["Folder"])
 def v1_get_folders():
-    target_path = str(shared.target_dir)
-    if not os.path.exists(target_path):
+    target_path = shared.target_dir
+    if not target_path.exists():
         raise HTTPException(status_code=404, detail="Directory not found")
-    if not os.path.isdir(target_path):
+    if not target_path.is_dir():
         raise HTTPException(status_code=400, detail="Path is not a directory")
 
     return get_directory_summary(target_path)
@@ -560,7 +555,7 @@ def v1_upload_file(
         raise HTTPException(status_code=400, detail="Either file or url must be provided")
     if file is None:
         headers = {
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",  # noqa: E501
         }
         if url and "pximg.net" in url:
             headers["referer"] = "https://www.pixiv.net/"
@@ -587,7 +582,8 @@ def v1_upload_file(
     session = get_session()
     session.add(post)
     session.commit()
-    with open(abs_path, "wb") as f:
+    session.refresh(post)
+    with abs_path.open("wb") as f:
         shutil.copyfileobj(file_io, f)
     process_post(session, abs_path, post)
     return ORJSONResponse(content={"filename": path})
