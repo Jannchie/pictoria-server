@@ -35,6 +35,11 @@ class PostHasTagPublic(BaseModel):
         from_attributes = True
 
 
+class PostHasColorPublic(BaseModel):
+    order: int
+    color: int
+
+
 class PostPublic(BaseModel):
     id: int
     file_path: str
@@ -54,6 +59,7 @@ class PostPublic(BaseModel):
     size: int
     source: str
     caption: str
+    colors: list[PostHasColorPublic]
 
     class Config:
         from_attributes = True

@@ -1,9 +1,10 @@
 import argparse
 import hashlib
-import os
 import signal
+import sys
 import threading
 import time
+from functools import cache
 from pathlib import Path
 
 import wdtagger
@@ -13,23 +14,24 @@ from PIL import Image
 from rich.progress import Progress
 from sqlalchemy import create_engine, insert, select
 from sqlalchemy.orm import Session, sessionmaker
-from watchdog.events import FileSystemEventHandler
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 import shared
 from alembic import command
 from alembic.config import Config
-from models import Post, PostHasTag, Tag, TagGroup
+from models import Post, PostHasColor, PostHasTag, Tag, TagGroup
 from shared import logger
+from tools.colors import get_palette_ints
 
 
-def initialize(args) -> None:
+def initialize(args: argparse.Namespace) -> None:
     prepare_paths(args)
     prepare_openai_api(args)
     init_thumbnails_directory()
 
 
-def prepare_openai_api(args) -> None:
+def prepare_openai_api(args: argparse.Namespace) -> None:
     if not shared.pictoria_dir:
         logger.warning("Pictoria directory not set, skipping OpenAI API key setup")
         return
@@ -40,7 +42,7 @@ def prepare_openai_api(args) -> None:
         shared.openai_key = args.openai_key
 
 
-def prepare_paths(args):
+def prepare_paths(args: argparse.Namespace) -> None:
     shared.target_dir = get_target_dir(args)
     shared.pictoria_dir = get_pictoria_directory()
     shared.db_path = get_db_path()
@@ -58,7 +60,7 @@ def use_route_names_as_operation_ids(app: FastAPI) -> None:
             route.operation_id = route.name
 
 
-def migrate_db(db_path):
+def migrate_db(db_path: Path) -> None:
 
     alembic_cfg = Config("alembic.ini")
     alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
@@ -68,7 +70,7 @@ def migrate_db(db_path):
         logger.info("Database migration successful")
     except Exception as e:
         logger.error(f"Error while migrating database: {e}")
-        exit(1)
+        sys.exit(1)
     logger.info("Database migration successful")
 
 
@@ -90,13 +92,13 @@ def get_pictoria_directory():
     return pictoria_dir
 
 
-def validate_path(target_path):
+def validate_path(target_path: Path):
     if not target_path.exists():
         logger.info(f'Error: Path "{target_path}" does not exist')
-        exit(1)
+        sys.exit(1)
 
 
-def get_target_dir(args):
+def get_target_dir(args: argparse.Namespace) -> Path:
     target_dir_str = args.target_dir
     target_dir = Path(target_dir_str).resolve()
     validate_path(target_dir)
@@ -126,7 +128,12 @@ def init_thumbnails_directory():
         logger.info(f'Created directory "{shared.thumbnails_dir}"')
 
 
-def remove_deleted_files(session, *, os_tuples_set, db_tuples_set):
+def remove_deleted_files(
+    session: Session,
+    *,
+    os_tuples_set: set[tuple[str, str, str]],
+    db_tuples_set: set[tuple[str, str, str]],
+):
     if deleted_files := db_tuples_set - os_tuples_set:
         logger.info(f"Detected {len(deleted_files)} files have been deleted")
         for file_path in deleted_files:
@@ -135,7 +142,7 @@ def remove_deleted_files(session, *, os_tuples_set, db_tuples_set):
         logger.info("Deleted files from database")
 
 
-def delete_by_file_path_and_ext(session, path_name_and_ext: tuple[str, str, str]):
+def delete_by_file_path_and_ext(session: Session, path_name_and_ext: tuple[str, str, str]):
     session.query(Post).filter(
         Post.file_path == path_name_and_ext[0],
         Post.file_name == path_name_and_ext[1],
@@ -191,19 +198,15 @@ def _sync_metadata() -> None:
     process_posts()
 
 
-engine = None
-MySession = None
+@cache
+def get_engine():
+    return create_engine(f"sqlite:///{shared.db_path}", echo=False, pool_size=100, max_overflow=200)
 
 
 def get_session():
-    global engine, MySession
-    if engine is None:
-        engine = create_engine(f"sqlite:///{shared.db_path}", echo=False, pool_size=100, max_overflow=200)
-
-    if MySession is None:
-        MySession = sessionmaker(bind=engine, expire_on_commit=False, autoflush=True)
-
-    return MySession()
+    engine = get_engine()
+    my_session = sessionmaker(bind=engine, expire_on_commit=False, autoflush=True)
+    return my_session()
 
 
 def get_relative_path(file_path: Path, target_dir: Path) -> str:
@@ -226,8 +229,6 @@ def find_files_in_directory(target_dir: Path) -> list[tuple[str, str, str]]:
             path = get_relative_path(file_path, target_dir)
             name = get_file_name(file_path)
             ext = get_file_extension(file_path)
-            if "@" in path:
-                print(file_path, path, name, ext)
             os_tuples.append((path, name, ext))
     logger.info(f"Found {len(os_tuples)} files in target directory")
     return os_tuples
@@ -260,11 +261,8 @@ def process_posts(*, all_posts: bool = False):
     Args:
         all (bool, optional): Process all posts or only those without an MD5 hash. Defaults to False.
     """
-    db_path = shared.db_path
     target_dir = shared.target_dir
-    engine = create_engine(f"sqlite:///{db_path}", echo=False)
-    session = sessionmaker(bind=engine)()
-
+    session = get_session()
     posts = session.query(Post).all() if all_posts else session.query(Post).filter(Post.md5.is_("")).all()
     with Progress(console=shared.console) as progress:
 
@@ -325,7 +323,7 @@ def _process_post(session: Session, file_abs_path: Path | None = None, post: Pos
             ".webp",
             ".avif",
         ]:
-            logger.debug(f"Skipping file: {file_abs_path}")
+            logger.debug(f"Skipping not image file: {file_abs_path}")
             return
         logger.info(f"Processing post: {file_abs_path}")
         with file_abs_path.open("rb") as file:
@@ -333,15 +331,25 @@ def _process_post(session: Session, file_abs_path: Path | None = None, post: Pos
             file.seek(0)  # 重置文件指针位置
             with Image.open(file) as img:
                 compute_image_properties(img, post, file_abs_path)
+        set_post_colors(post)
     except Exception as e:
         logger.warning(f"Error processing file: {file_abs_path}")
         logger.exception(e)
     finally:
         if file_data:
-            update_file_metadata(file_data, post, file_abs_path, session)
+            update_file_metadata(file_data, post, file_abs_path)
+        session.add(post)
+        session.commit()
 
 
-def update_file_metadata(file_data: bytes, post: Post, file_abs_path: Path, session: Session):
+def set_post_colors(post: Post):
+    if post.colors:
+        return
+    colors = get_palette_ints(post.absolute_path.as_posix())
+    post.colors.extend(PostHasColor(post_id=post.id, order=i, color=color) for i, color in enumerate(colors))
+
+
+def update_file_metadata(file_data: bytes, post: Post, file_abs_path: Path):
     post.md5 = calculate_md5(file_data)
     post.size = file_abs_path.stat().st_size
 
@@ -355,9 +363,6 @@ def update_file_metadata(file_data: bytes, post: Post, file_abs_path: Path, sess
     #     session.add(folder_record)
     # folder_record.file_count += 1
 
-    session.add(post)
-    session.commit()
-
 
 def compute_image_properties(img: Image.Image, post: Post, file_abs_path: Path):
     img.verify()
@@ -365,14 +370,20 @@ def compute_image_properties(img: Image.Image, post: Post, file_abs_path: Path):
     relative_path = file_abs_path.relative_to(shared.target_dir)
     thumbnails_path = shared.thumbnails_dir / relative_path
     if not thumbnails_path.exists():
-        os.makedirs(thumbnails_path.parent, exist_ok=True)
+        thumbnails_path.parent.mkdir(parents=True, exist_ok=True)
         create_thumbnail(
             file_abs_path,
             thumbnails_path,
         )
 
 
-def remove_post(session, file_abs_path=None, post=None, auto_commit=True):
+def remove_post(
+    session: Session,
+    file_abs_path: Path | None = None,
+    post: Post | None = None,
+    *,
+    auto_commit: bool = True,
+):
     if post is None:
         file_path, file_name, extension = get_path_name_and_extension(file_abs_path)
         post = (
@@ -392,7 +403,7 @@ def remove_post(session, file_abs_path=None, post=None, auto_commit=True):
     relative_path = file_abs_path.relative_to(shared.target_dir)
     thumbnails_path = shared.thumbnails_dir / relative_path
     if thumbnails_path.exists():
-        os.remove(thumbnails_path)
+        thumbnails_path.unlink()
         logger.info(f"Removed thumbnail: {thumbnails_path}")
     session.delete(post)
     if auto_commit:
@@ -400,7 +411,7 @@ def remove_post(session, file_abs_path=None, post=None, auto_commit=True):
     logger.info(f"Removed post from database: {file_abs_path}")
 
 
-def remove_post_in_path(session, file_path: Path):
+def remove_post_in_path(session: Session, file_path: Path):
     # 如果 file_path 是绝对路径，则转换为相对路径
     if file_path.is_absolute():
         file_path = file_path.relative_to(shared.target_dir)
@@ -440,7 +451,7 @@ class Handler(FileSystemEventHandler):
         self.lock = threading.Lock()
         self.engine = create_engine(f"sqlite:///{shared.db_path}", echo=False)
 
-    def on_any_event(self, event):
+    def on_any_event(self, event: FileSystemEvent):
 
         if event.src_path.startswith(str(shared.pictoria_dir)):
             return

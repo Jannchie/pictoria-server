@@ -46,12 +46,16 @@ torch = { index = "pytorch" }
 torchvision = { index = "pytorch" }
 image-gen-aux = { git = "https://github.com/asomoza/image_gen_aux.git" }
 
+[dependency-groups]
+dev = ["matplotlib>=3.9.3"]
+
 [tool.pyright]
 reportAssignmentType = "none"
 reportArgumentType = "none"
 
 [tool.ruff]
 select = ["ALL"]
+exclude = ["alembic"]
 ignore = [
     "PGH",
     "RUF003",

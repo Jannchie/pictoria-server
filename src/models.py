@@ -3,7 +3,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
 
-import pydantic
 from PIL import Image
 from sqlalchemy import Boolean, Computed, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import (
@@ -49,6 +48,15 @@ class Tag(Base):
     )
 
 
+class PostHasColor(Base):
+    __tablename__ = "post_has_color"
+
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True)
+    order: Mapped[int] = mapped_column(Integer, primary_key=True)
+    color: Mapped[int] = mapped_column(Integer, nullable=False)
+    post: Mapped["Post"] = relationship(back_populates="colors", init=False)
+
+
 class Post(Base):
     __tablename__ = "posts"
     __table_args__ = (Index("idx_file_path_name_extension", "file_path", "file_name", "extension", unique=True),)
@@ -62,6 +70,7 @@ class Post(Base):
         String,
         Computed("file_path || '/' || file_name || '.' || extension"),
         init=False,
+        nullable=False,
     )
     aspect_ratio: Mapped[float] = mapped_column(Float, Computed("width * 1.0 / NULLIF(height, 0)"), init=False)
 
@@ -91,6 +100,7 @@ class Post(Base):
     source: Mapped[str] = mapped_column(String, nullable=False, default="", server_default="", index=True)
     caption: Mapped[str] = mapped_column(String, nullable=False, default="", server_default="")
     tags: Mapped[list["PostHasTag"]] = relationship(back_populates="post", default_factory=list, lazy="select")
+    colors: Mapped[list["PostHasColor"]] = relationship(back_populates="post", default_factory=list, lazy="select")
 
     @property
     def absolute_path(self) -> Path:

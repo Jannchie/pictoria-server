@@ -3,6 +3,7 @@ import os
 import pathlib
 import shutil
 import tomllib
+from threading import Thread
 from typing import Annotated
 
 import fastapi
@@ -24,7 +25,7 @@ from wdtagger import Tagger
 
 import shared
 from ai import OpenAIImageAnnotator
-from models import Post, PostHasTag, Tag, TagGroup
+from models import Post, PostHasColor, PostHasTag, Tag, TagGroup
 from scheme import PostPublic, PostWithTagPublic, TagGroupWithTagsPublic
 from utils import (
     attach_tags_to_post,
@@ -37,6 +38,7 @@ from utils import (
     parse_arguments,
     process_post,
     process_posts,
+    set_post_colors,
     sync_metadata,
     use_route_names_as_operation_ids,
     watch_target_dir,
@@ -52,10 +54,22 @@ async def lifespan(_: FastAPI):
     initialize(args)
     sync_metadata()
     watch_target_dir()
+    Thread(target=analyze_palettes).start()
     host = args.host or "localhost"
     doc_url = f"http://{host}:{args.port}/docs"
     shared.logger.info(f"API Document: {doc_url}")
     yield
+
+
+def analyze_palettes():
+    with get_session() as session:
+        posts = session.scalars(
+            select(Post).outerjoin(PostHasColor).where(Post.width > 0, PostHasColor.color.is_(None)),
+        ).all()
+        for post in track(posts, description="Analyzing palettes...", console=console):
+            set_post_colors(post)
+            session.add(post)
+            session.commit()
 
 
 console = get_console()
