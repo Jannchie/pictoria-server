@@ -5,7 +5,6 @@ import signal
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
 import wdtagger
 from fastapi import FastAPI
@@ -24,18 +23,18 @@ from models import Post, PostHasTag, Tag, TagGroup
 from shared import logger
 
 
-def initialize(args):
+def initialize(args) -> None:
     prepare_paths(args)
     prepare_openai_api(args)
     init_thumbnails_directory()
 
 
-def prepare_openai_api(args):
+def prepare_openai_api(args) -> None:
     if not shared.pictoria_dir:
         logger.warning("Pictoria directory not set, skipping OpenAI API key setup")
         return
     if shared.pictoria_dir.joinpath("OPENAI_API_KEY").exists():
-        with open(shared.pictoria_dir.joinpath("OPENAI_API_KEY")) as f:
+        with shared.pictoria_dir.joinpath("OPENAI_API_KEY").open() as f:
             shared.openai_key = f.read().strip()
     if args.openai_key:
         shared.openai_key = args.openai_key
@@ -149,18 +148,21 @@ def delete_by_file_path_and_ext(session, path_name_and_ext: tuple[str, str, str]
     file_path = shared.target_dir / relative_path
     thumbnails_path = shared.thumbnails_dir / relative_path
     if thumbnails_path.exists():
-        os.remove(thumbnails_path)
+        thumbnails_path.unlink()
     if file_path.exists():
-        os.remove(file_path)
+        file_path.unlink()
 
 
-def add_new_files(session, *, os_tuples_set, db_tuples_set):
+def add_new_files(
+    session: Session,
+    *,
+    os_tuples_set: set[tuple[str, str, str]],
+    db_tuples_set: set[tuple[str, str, str]],
+):
     if new_file_tuples := os_tuples_set - db_tuples_set:
         logger.info(f"Detected {len(new_file_tuples)} new files")
         for file_tuple in new_file_tuples:
-            print(file_tuple)
             image = Post(file_path=file_tuple[0], file_name=file_tuple[1], extension=file_tuple[2])
-
             session.add(image)
         session.commit()
         logger.info("Added new files to database")
@@ -172,7 +174,7 @@ def sync_metadata():
     ).start()
 
 
-def _sync_metadata():
+def _sync_metadata() -> None:
 
     os_tuples = find_files_in_directory(shared.target_dir)
 
@@ -190,18 +192,22 @@ def _sync_metadata():
 
 
 engine = None
+MySession = None
 
 
 def get_session():
-    global engine
+    global engine, MySession
     if engine is None:
-        engine = create_engine(f"sqlite:///{shared.db_path}", echo=False)
-    Session = sessionmaker(bind=engine)
-    return Session()
+        engine = create_engine(f"sqlite:///{shared.db_path}", echo=False, pool_size=100, max_overflow=200)
+
+    if MySession is None:
+        MySession = sessionmaker(bind=engine, expire_on_commit=False, autoflush=True)
+
+    return MySession()
 
 
 def get_relative_path(file_path: Path, target_dir: Path) -> str:
-    return str(file_path.relative_to(target_dir).parent)
+    return file_path.relative_to(target_dir).parent.as_posix()
 
 
 def get_file_name(file_path: Path) -> str:
@@ -217,9 +223,11 @@ def find_files_in_directory(target_dir: Path) -> list[tuple[str, str, str]]:
     for file_path in target_dir.rglob("*"):
         relative_path = file_path.relative_to(target_dir)
         if file_path.is_file() and not relative_path.parts[0].startswith("."):
-            path = get_relative_path(file_path, target_dir).replace("\\", "/")
+            path = get_relative_path(file_path, target_dir)
             name = get_file_name(file_path)
             ext = get_file_extension(file_path)
+            if "@" in path:
+                print(file_path, path, name, ext)
             os_tuples.append((path, name, ext))
     logger.info(f"Found {len(os_tuples)} files in target directory")
     return os_tuples
@@ -227,17 +235,17 @@ def find_files_in_directory(target_dir: Path) -> list[tuple[str, str, str]]:
 
 def calculate_md5(file: bytes) -> str:
     # 读取文件的内容并计算 md5 值。
-    md5 = hashlib.md5()
+    md5 = hashlib.sha256()
     md5.update(file)
     return md5.hexdigest()
 
 
-def create_thumbnail(input_image_path, output_image_path, max_width=400):
+def create_thumbnail(input_image_path: Path, output_image_path: Path, max_width: int = 400):
     with Image.open(input_image_path) as img:
         create_thumbnail_by_image(img, output_image_path, max_width)
 
 
-def create_thumbnail_by_image(img: Image.Image, output_image_path, max_width=400):
+def create_thumbnail_by_image(img: Image.Image, output_image_path: Path, max_width: int = 400):
     width, height = img.size
     if width > max_width:
         new_width = max_width
@@ -246,7 +254,7 @@ def create_thumbnail_by_image(img: Image.Image, output_image_path, max_width=400
     img.save(output_image_path)
 
 
-def process_posts(all=False):
+def process_posts(*, all_posts: bool = False):
     """Process posts in the database. Including calculating MD5 hash, size, and creating thumbnails.
 
     Args:
@@ -255,13 +263,9 @@ def process_posts(all=False):
     db_path = shared.db_path
     target_dir = shared.target_dir
     engine = create_engine(f"sqlite:///{db_path}", echo=False)
-    Session = sessionmaker(bind=engine)
-    session = Session()
+    session = sessionmaker(bind=engine)()
 
-    if not all:
-        posts = session.query(Post).filter(Post.md5.is_("")).all()
-    else:
-        posts = session.query(Post).all()
+    posts = session.query(Post).all() if all_posts else session.query(Post).filter(Post.md5.is_("")).all()
     with Progress(console=shared.console) as progress:
 
         if not posts:
@@ -270,21 +274,17 @@ def process_posts(all=False):
         task = progress.add_task("Processing posts...", total=len(posts))
         for post in posts:
             # 构建文件的完整路径。
-            file_abs_path = target_dir / post.file_path / post.file_name
-            file_abs_path = file_abs_path.with_suffix(f".{post.extension}")
+            file_abs_path = target_dir / post.file_path / f"{post.file_name}.{post.extension}"
             process_post(session, file_abs_path, post)
             progress.update(task, advance=1)
 
 
 def get_path_name_and_extension(file_path: Path) -> tuple[str, str, str]:
     # 如果是绝对路径，则将其转换为相对路径，相对于target_dir
-    if file_path.is_absolute():
-        basic_path = file_path.relative_to(shared.target_dir)
-    else:
-        basic_path = file_path
+    basic_path = file_path.relative_to(shared.target_dir) if file_path.is_absolute() else file_path
 
-    path = str(basic_path.parent).replace("\\", "/")  # 文件所在的目录，使用正斜杠分隔符
-    name = str(basic_path.stem)  # 不包含扩展名的文件名
+    path = basic_path.parent.as_posix()
+    name = basic_path.stem  # 不包含扩展名的文件名
     ext = file_path.suffix[1:]  # 扩展名（不含点）
 
     return path, name, ext
@@ -293,12 +293,12 @@ def get_path_name_and_extension(file_path: Path) -> tuple[str, str, str]:
 process_post_lock = threading.Lock()
 
 
-def process_post(session: Session, file_abs_path: Optional[Path] = None, post: Optional[Post] = None):
+def process_post(session: Session, file_abs_path: Path | None = None, post: Post | None = None):
     with process_post_lock:
         _process_post(session, file_abs_path, post)
 
 
-def _process_post(session: Session, file_abs_path: Optional[Path] = None, post: Optional[Post] = None):
+def _process_post(session: Session, file_abs_path: Path | None = None, post: Post | None = None) -> None:
     if post is None:
         file_path, file_name, extension = get_path_name_and_extension(file_abs_path)
         post = (
@@ -323,6 +323,7 @@ def _process_post(session: Session, file_abs_path: Optional[Path] = None, post: 
             ".png",
             ".gif",
             ".webp",
+            ".avif",
         ]:
             logger.debug(f"Skipping file: {file_abs_path}")
             return
@@ -412,11 +413,11 @@ def remove_post_in_path(session, file_path: Path):
 
 
 class Watcher:
-    def __init__(self, directory_to_watch):
+    def __init__(self, directory_to_watch: Path) -> None:
         self.DIRECTORY_TO_WATCH = directory_to_watch
         self.observer = Observer()
 
-    def run(self):
+    def run(self) -> None:
         event_handler = Handler()
         self.observer.schedule(event_handler, self.DIRECTORY_TO_WATCH, recursive=True)
         logger.info("Starting watcher")
@@ -427,12 +428,12 @@ class Watcher:
         self.observer.stop()
         self.observer.join()
 
-    def stop(self):
+    def stop(self) -> None:
         shared.should_watch = False
 
 
 class Handler(FileSystemEventHandler):
-    def __init__(self, debounce_time=1):
+    def __init__(self, debounce_time: int = 1) -> None:
         super().__init__()
         self.last_event_times = {}
         self.debounce_time = debounce_time
@@ -442,7 +443,7 @@ class Handler(FileSystemEventHandler):
     def on_any_event(self, event):
 
         if event.src_path.startswith(str(shared.pictoria_dir)):
-            return None
+            return
         if event.is_directory:
             return
 
@@ -474,12 +475,12 @@ class Handler(FileSystemEventHandler):
             logger.exception(e)
 
 
-def watch_target_dir():
+def watch_target_dir() -> None:
     w = Watcher(shared.target_dir)
     threading.Thread(target=w.run).start()
 
 
-def signal_handler(*_):
+def signal_handler(*_: tuple) -> None:
     logger.info("Exit signal received, stopping threads...")
     shared.stop_event.set()
 
@@ -487,7 +488,8 @@ def signal_handler(*_):
 signal.signal(signal.SIGINT, signal_handler)
 
 
-def from_rating_to_int(rating):
+def from_rating_to_int(rating: str) -> int:
+    # sourcery skip: assign-if-exp, reintroduce-else
     """
     0: Not Rated
     1: general
@@ -497,17 +499,16 @@ def from_rating_to_int(rating):
     """
     if rating == "general":
         return 1
-    elif rating == "sensitive":
+    if rating == "sensitive":
         return 2
-    elif rating == "questionable":
+    if rating == "questionable":
         return 3
-    elif rating == "explicit":
+    if rating == "explicit":
         return 4
-    else:
-        return 0
+    return 0
 
 
-def attach_tags_to_post(session: Session, post: Post, resp: wdtagger.Result, is_auto=False):
+def attach_tags_to_post(session: Session, post: Post, resp: wdtagger.Result, *, is_auto: bool = False):
     # 统一查看是否有名为 general 或者 character 的 TagGroup，如果没有则创建
     group_names = ["general", "character"]
     colors = {
@@ -519,7 +520,6 @@ def attach_tags_to_post(session: Session, post: Post, resp: wdtagger.Result, is_
         if tag_group is None:
             tag_group = TagGroup(name=tag_group_name, color=colors[tag_group_name])
             session.add(tag_group)
-    print(resp.general_tags, resp.character_tags)
     # 遍历标签并进行处理
     for i, tag_names in enumerate([resp.general_tags, resp.character_tags]):
         name = group_names[i]
@@ -540,12 +540,12 @@ def attach_tags_to_post(session: Session, post: Post, resp: wdtagger.Result, is_
                             "group_id": tag_group.id,
                         }
                         for tag_name in new_tags
-                    ]
-                )
+                    ],
+                ),
             )
 
         post_existing_tags = session.scalars(
-            select(PostHasTag).where(PostHasTag.tag_name.in_(tag_names) & (PostHasTag.post_id == post.id))
+            select(PostHasTag).where(PostHasTag.tag_name.in_(tag_names) & (PostHasTag.post_id == post.id)),
         ).all()
         post_existing_tag_names = {tag_record.tag_name for tag_record in post_existing_tags}
         if post_new_tags := set(tag_names) - post_existing_tag_names:
@@ -558,8 +558,8 @@ def attach_tags_to_post(session: Session, post: Post, resp: wdtagger.Result, is_
                             "is_auto": is_auto,
                         }
                         for tag_name in post_new_tags
-                    ]
-                )
+                    ],
+                ),
             )
 
     session.add(post)

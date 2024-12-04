@@ -7,6 +7,7 @@ from typing import Annotated
 
 import fastapi
 import httpx
+import pillow_avif  # noqa: F401
 import uvicorn
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Path, UploadFile
 from fastapi.concurrency import asynccontextmanager
@@ -181,7 +182,7 @@ def v1_count_group_by_rating(
     stmt = select(Post.rating, func.count()).group_by(Post.rating)
     stmt = apply_filtered_query(filter, stmt)
     resp = session.execute(stmt).all()
-    return [RatingCountResponse(rating=row[0] if row[0] is not None else 0, count=row[1]) for row in resp]
+    return [RatingCountResponse(rating=row[0], count=row[1]) for row in resp]
 
 
 class ScoreCountResponse(BaseModel):
@@ -227,6 +228,7 @@ def v1_update_post_score(post_id: Annotated[int, Path(gt=0)], score_update: Scor
         raise HTTPException(status_code=404, detail="Post not found")
     post.score = score_update.score
     session.commit()
+    session.refresh(post)
     return post
 
 
@@ -423,7 +425,7 @@ def v1_move_posts(post_ids: list[int], new_path: str, session: Annotated[Session
 
 @app.post("/v1/cmd/process-posts", tags=["Command"])
 def v1_cmd_process_posts():
-    process_posts(all=True)
+    process_posts(all_posts=True)
     return {"status": "ok"}
 
 
