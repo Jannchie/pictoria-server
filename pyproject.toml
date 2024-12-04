@@ -24,6 +24,7 @@ dependencies = [
     "protobuf>=5.28.3",
     "image-gen-aux",
     "pillow-avif-plugin>=1.4.6",
+    "colorthief>=0.2.1",
 ]
 
 requires-python = ">=3.11"

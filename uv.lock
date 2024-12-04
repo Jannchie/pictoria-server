@@ -130,6 +130,18 @@ wheels = [
 ]
 
 [[package]]
+name = "colorthief"
+version = "0.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pillow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b6/b2/b55b741f7a7d1299d23e1c635f00f6c57ea4d2e9b76d09e1fc5ea3ca9921/colorthief-0.2.1.tar.gz", hash = "sha256:079cb0c95bdd669c4643e2f7494de13b0b6029d5cdbe2d74d5d3c3386bd57221", size = 6164 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/56/18/be03b7058e65f9df479b14e7af4e73945ce311e07aaad45cf2536e14791a/colorthief-0.2.1-py2.py3-none-any.whl", hash = "sha256:b04fc8ce5cf9c888768745e29cb19b7b688d5711af6fba26e8057debabec56b9", size = 6134 },
+]
+
+[[package]]
 name = "diffusers"
 version = "0.31.0"
 source = { registry = "https://pypi.org/simple" }
@@ -824,6 +836,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
+    { name = "colorthief" },
     { name = "diffusers" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -848,6 +861,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.14.0" },
+    { name = "colorthief", specifier = ">=0.2.1" },
     { name = "diffusers", specifier = ">=0.31.0" },
     { name = "fastapi", specifier = ">=0.115.5" },
     { name = "httpx", specifier = ">=0.27.2" },
