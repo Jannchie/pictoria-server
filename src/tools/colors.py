@@ -1,14 +1,17 @@
+from io import BufferedReader
 from pathlib import Path
 
 import numpy as np
 from colorthief import ColorThief
 from matplotlib import pyplot as plt
 
+from utils import timer
 
+
+@timer
 def get_palette(image_path: Path, *, colors: int = 5) -> tuple[tuple[int, int, int], ...]:
     color_thief = ColorThief(image_path)
-
-    return tuple(color_thief.get_palette(color_count=colors))
+    return tuple(color_thief.get_palette(color_count=colors, quality=4))
 
 
 def rgb2int(rgb: tuple[int, int, int]) -> int:
@@ -33,7 +36,7 @@ def show_palette(palette: tuple[tuple[int, int, int]]) -> None:
     plt.show()
 
 
-def get_palette_ints(image: Path, *, colors: int = 5) -> tuple[int, ...]:
+def get_palette_ints(image: Path | BufferedReader, *, colors: int = 5) -> tuple[int, ...]:
     return tuple(rgb2int(rgb) for rgb in get_palette(image, colors=colors))
 
 

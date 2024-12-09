@@ -8,6 +8,8 @@ from openai import OpenAI
 from rich import get_console
 from wdtagger import Tagger
 
+from utils import timer
+
 console = get_console()
 
 
@@ -41,6 +43,7 @@ class OpenAIImageAnnotator(BaseAnnotator):
         image.save(buffered, format="JPEG")  # Change format as needed
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
+    @timer
     def annotate_image(self, image_path: Path) -> str:
         image = self.load_and_process_image(image_path)
         base64_image = self.get_img_base64(image)
@@ -54,11 +57,10 @@ class OpenAIImageAnnotator(BaseAnnotator):
                         {
                             "type": "text",
                             "text": (
-                                "Create a caption for the image "
-                                "using natural language. Your caption need to be as specific as possible and "
-                                "should be distinguishable from other images. Not only should you include the content "
-                                "and elements, but you should also cover aspects such as composition, art style, type, "
-                                "color, structure, etc. I will use your output to label training data. "
+                                "Create a caption for the image. "
+                                "You must use simple natural language. Your caption need to be as specific as possible"
+                                "and should be distinguishable from other images. You should include all the content "
+                                "and elements in the image."
                                 "The caption should shorter than 60 words."
                             ),
                         },

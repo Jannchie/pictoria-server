@@ -26,9 +26,11 @@ from wdtagger import Tagger
 import shared
 from ai import OpenAIImageAnnotator
 from models import Post, PostHasColor, PostHasTag, Tag, TagGroup
+from processors import process_post, process_posts, set_post_colors, sync_metadata
 from scheme import PostPublic, PostWithTagPublic, TagGroupWithTagsPublic
 from utils import (
     attach_tags_to_post,
+    create_thumbnail,
     delete_by_file_path_and_ext,
     from_rating_to_int,
     get_path_name_and_extension,
@@ -36,13 +38,9 @@ from utils import (
     initialize,
     logger,
     parse_arguments,
-    process_post,
-    process_posts,
-    set_post_colors,
-    sync_metadata,
     use_route_names_as_operation_ids,
-    watch_target_dir,
 )
+from watch import watch_target_dir
 
 with pathlib.Path("pyproject.toml").open("rb") as f:
     pyproject = tomllib.load(f)
@@ -298,7 +296,7 @@ def v1_get_post(post_id: int, session: Annotated[Session, Depends(get_session)])
 
 
 @app.get("/v1/images/{post_path:pathlike}", tags=["Image"])
-def v1_get_post_by_path(post_path: str) -> fastapi.responses.FileResponse:
+async def v1_get_post_by_path(post_path: str) -> fastapi.responses.FileResponse:
     if not shared.target_dir:
         raise HTTPException(status_code=400, detail="Target directory is not set")
     abs_path = shared.target_dir / post_path
@@ -306,7 +304,7 @@ def v1_get_post_by_path(post_path: str) -> fastapi.responses.FileResponse:
 
 
 @app.get("/v1/thumbnails/{post_path:pathlike}", tags=["Image"])
-def v1_get_thumbnail(post_path: str) -> fastapi.responses.FileResponse:
+async def v1_get_thumbnail(post_path: str) -> fastapi.responses.FileResponse:
     if not shared.thumbnails_dir:
         raise HTTPException(status_code=400, detail="Thumbnails directory is not set")
     abs_path = shared.thumbnails_dir / post_path
@@ -449,8 +447,9 @@ def v1_cmd_auto_tags(post_id: int, session: Annotated[Session, Depends(get_sessi
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
     abs_path = post.absolute_path
-    tagger = shared.tagger if shared.tagger is not None else Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3")
-    resp = tagger.tag(abs_path)
+    if shared.tagger is None:
+        shared.tagger = Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3")
+    resp = shared.tagger.tag(abs_path)
     logger.info(resp)
     post.rating = from_rating_to_int(resp.rating)
     attach_tags_to_post(session, post, resp, is_auto=True)

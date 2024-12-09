@@ -25,6 +25,9 @@ dependencies = [
     "image-gen-aux",
     "pillow-avif-plugin>=1.4.6",
     "colorthief>=0.2.1",
+    "datasets>=3.1.0",
+    "sqlite-vec>=0.1.6",
+    "accelerate>=1.2.0",
 ]
 
 requires-python = ">=3.11"

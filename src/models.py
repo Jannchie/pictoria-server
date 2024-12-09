@@ -114,7 +114,7 @@ class Post(Base):
         from utils import calculate_md5, create_thumbnail_by_image
 
         image = Image.open(self.absolute_path)
-        image = image.rotate(90 if clockwise else -90, expand=True)
+        image = image.rotate(-90 if clockwise else 90, expand=True)
         image.save(self.absolute_path)
         create_thumbnail_by_image(image, self.thumbnail_path)
         file_data = image.tobytes()

@@ -1,28 +1,42 @@
 import argparse
 import hashlib
-import signal
+import sqlite3
 import sys
-import threading
 import time
-from functools import cache
+from collections.abc import Callable
+from functools import cache, wraps
 from pathlib import Path
+from typing import Any, TypeVar
 
+import sqlite_vec
 import wdtagger
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from PIL import Image
-from rich.progress import Progress
-from sqlalchemy import create_engine, insert, select
+from sqlalchemy import create_engine, event, insert, select
 from sqlalchemy.orm import Session, sessionmaker
-from watchdog.events import FileSystemEvent, FileSystemEventHandler
-from watchdog.observers import Observer
 
 import shared
 from alembic import command
 from alembic.config import Config
-from models import Post, PostHasColor, PostHasTag, Tag, TagGroup
+from models import Post, PostHasTag, Tag, TagGroup
 from shared import logger
-from tools.colors import get_palette_ints
+
+# 定义泛型变量，用于注释被装饰的可调用对象的返回类型
+R = TypeVar("R")
+
+
+def timer(func: Callable[..., R]) -> Callable[..., R]:
+    @wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> R:  # noqa: ANN401
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        execution_time = end_time - start_time
+        logger.info(f"Function '{func.__name__}' executed in: {execution_time:.4f} seconds")
+        return result
+
+    return wrapper
 
 
 def initialize(args: argparse.Namespace) -> None:
@@ -175,32 +189,21 @@ def add_new_files(
         logger.info("Added new files to database")
 
 
-def sync_metadata():
-    threading.Thread(
-        target=_sync_metadata,
-    ).start()
-
-
-def _sync_metadata() -> None:
-
-    os_tuples = find_files_in_directory(shared.target_dir)
-
-    session = get_session()
-    rows = session.query(Post.file_path, Post.file_name, Post.extension).all()
-    db_tuples = [(row[0], row[1], row[2]) for row in rows]
-    logger.info(f"Found {len(db_tuples)} files in database")
-
-    db_tuples_set = set(db_tuples)
-    os_tuples_set = set(os_tuples)
-
-    remove_deleted_files(session, os_tuples_set=os_tuples_set, db_tuples_set=db_tuples_set)
-    add_new_files(session, os_tuples_set=os_tuples_set, db_tuples_set=db_tuples_set)
-    process_posts()
+def load_extension(dbapi_connection: sqlite3.Connection, *args) -> None:  # noqa: ANN002, ARG001
+    # 只有当使用 SQLite 时才可以加载扩展
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        logger.info("Loading SQLite extensions")
+        dbapi_connection.enable_load_extension(True)  # noqa: FBT003
+        sqlite_vec.load(dbapi_connection)
+        dbapi_connection.enable_load_extension(False)  # noqa: FBT003
+        logger.info("SQLite extensions loaded")
 
 
 @cache
 def get_engine():
-    return create_engine(f"sqlite:///{shared.db_path}", echo=False, pool_size=100, max_overflow=200)
+    engine = create_engine(f"sqlite:///{shared.db_path}", echo=False, pool_size=100, max_overflow=200)
+    event.listen(engine, "connect", load_extension)
+    return engine
 
 
 def get_session():
@@ -255,28 +258,6 @@ def create_thumbnail_by_image(img: Image.Image, output_image_path: Path, max_wid
     img.save(output_image_path)
 
 
-def process_posts(*, all_posts: bool = False):
-    """Process posts in the database. Including calculating MD5 hash, size, and creating thumbnails.
-
-    Args:
-        all (bool, optional): Process all posts or only those without an MD5 hash. Defaults to False.
-    """
-    target_dir = shared.target_dir
-    session = get_session()
-    posts = session.query(Post).all() if all_posts else session.query(Post).filter(Post.md5.is_("")).all()
-    with Progress(console=shared.console) as progress:
-
-        if not posts:
-            logger.info("No posts to process")
-            return
-        task = progress.add_task("Processing posts...", total=len(posts))
-        for post in posts:
-            # 构建文件的完整路径。
-            file_abs_path = target_dir / post.file_path / f"{post.file_name}.{post.extension}"
-            process_post(session, file_abs_path, post)
-            progress.update(task, advance=1)
-
-
 def get_path_name_and_extension(file_path: Path) -> tuple[str, str, str]:
     # 如果是绝对路径，则将其转换为相对路径，相对于target_dir
     basic_path = file_path.relative_to(shared.target_dir) if file_path.is_absolute() else file_path
@@ -286,67 +267,6 @@ def get_path_name_and_extension(file_path: Path) -> tuple[str, str, str]:
     ext = file_path.suffix[1:]  # 扩展名（不含点）
 
     return path, name, ext
-
-
-process_post_lock = threading.Lock()
-
-
-def process_post(session: Session, file_abs_path: Path | None = None, post: Post | None = None):
-    with process_post_lock:
-        _process_post(session, file_abs_path, post)
-
-
-def _process_post(session: Session, file_abs_path: Path | None = None, post: Post | None = None) -> None:
-    if post is None:
-        file_path, file_name, extension = get_path_name_and_extension(file_abs_path)
-        post = (
-            session.query(Post)
-            .filter(Post.file_path == file_path, Post.file_name == file_name, Post.extension == extension)
-            .first()
-        )
-    if post is None:
-        logger.info(f"Post not found in database: {file_abs_path}")
-        return
-    if post.md5:
-        logger.info(f"Skipping post: {file_abs_path}")
-        return
-    file_data = None
-    try:
-        if file_abs_path is None:
-            file_abs_path = shared.target_dir / post.file_path / post.file_name
-            file_abs_path = file_abs_path.with_suffix(f".{post.extension}")
-        if file_abs_path.suffix.lower() not in [
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".gif",
-            ".webp",
-            ".avif",
-        ]:
-            logger.debug(f"Skipping not image file: {file_abs_path}")
-            return
-        logger.info(f"Processing post: {file_abs_path}")
-        with file_abs_path.open("rb") as file:
-            file_data = file.read()
-            file.seek(0)  # 重置文件指针位置
-            with Image.open(file) as img:
-                compute_image_properties(img, post, file_abs_path)
-        set_post_colors(post)
-    except Exception as e:
-        logger.warning(f"Error processing file: {file_abs_path}")
-        logger.exception(e)
-    finally:
-        if file_data:
-            update_file_metadata(file_data, post, file_abs_path)
-        session.add(post)
-        session.commit()
-
-
-def set_post_colors(post: Post):
-    if post.colors:
-        return
-    colors = get_palette_ints(post.absolute_path.as_posix())
-    post.colors.extend(PostHasColor(post_id=post.id, order=i, color=color) for i, color in enumerate(colors))
 
 
 def update_file_metadata(file_data: bytes, post: Post, file_abs_path: Path):
@@ -421,82 +341,6 @@ def remove_post_in_path(session: Session, file_path: Path):
     for post in posts:
         remove_post(session, post=post, auto_commit=False)
     session.commit()
-
-
-class Watcher:
-    def __init__(self, directory_to_watch: Path) -> None:
-        self.DIRECTORY_TO_WATCH = directory_to_watch
-        self.observer = Observer()
-
-    def run(self) -> None:
-        event_handler = Handler()
-        self.observer.schedule(event_handler, self.DIRECTORY_TO_WATCH, recursive=True)
-        logger.info("Starting watcher")
-        self.observer.start()
-        while not shared.stop_event.is_set():
-            time.sleep(1)
-        logger.info("Stopping watcher")
-        self.observer.stop()
-        self.observer.join()
-
-    def stop(self) -> None:
-        shared.should_watch = False
-
-
-class Handler(FileSystemEventHandler):
-    def __init__(self, debounce_time: int = 1) -> None:
-        super().__init__()
-        self.last_event_times = {}
-        self.debounce_time = debounce_time
-        self.lock = threading.Lock()
-        self.engine = create_engine(f"sqlite:///{shared.db_path}", echo=False)
-
-    def on_any_event(self, event: FileSystemEvent):
-
-        if event.src_path.startswith(str(shared.pictoria_dir)):
-            return
-        if event.is_directory:
-            return
-
-        event_key = (event.src_path, event.event_type)
-        current_time = time.time()
-        with self.lock:
-            last_event_time = self.last_event_times.get(event_key, 0)
-            if current_time - last_event_time < self.debounce_time:
-                return
-            self.last_event_times[event_key] = current_time
-
-        try:
-            session = get_session()
-            if event.event_type == "created":
-                logger.debug(f"Received created event - {event.src_path}")
-                process_post(session, Path(event.src_path))
-            elif event.event_type == "modified":
-                logger.debug(f"Received modified event - {event.src_path}")
-                process_post(session, Path(event.src_path))
-            elif event.event_type == "deleted":
-                logger.debug(f"Received deleted event - {event.src_path}")
-                if Path(event.src_path).is_file():
-                    remove_post(session, Path(event.src_path))
-                else:
-                    remove_post_in_path(session, Path(event.src_path))
-            # self.sync_metadata_folder()
-        except Exception as e:
-            logger.error(f"Error processing event: {event}")
-            logger.exception(e)
-
-
-def watch_target_dir() -> None:
-    w = Watcher(shared.target_dir)
-    threading.Thread(target=w.run).start()
-
-
-def signal_handler(*_: tuple) -> None:
-    logger.info("Exit signal received, stopping threads...")
-    shared.stop_event.set()
-
-
-signal.signal(signal.SIGINT, signal_handler)
 
 
 def from_rating_to_int(rating: str) -> int:

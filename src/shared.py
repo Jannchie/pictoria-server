@@ -1,12 +1,15 @@
 import logging
 import threading
+import typing
 from pathlib import Path
+from typing import Optional
 
 from rich import get_console
 from rich.logging import RichHandler
 from wdtagger import Tagger
 
-from ai import OpenAIImageAnnotator
+if typing.TYPE_CHECKING:
+    from ai import OpenAIImageAnnotator
 
 db_path: None | Path = None
 
@@ -20,7 +23,8 @@ stop_event = threading.Event()
 console = get_console()
 
 openai_key: None | str = None
-caption_annotator: None | OpenAIImageAnnotator = None
+
+caption_annotator: Optional["OpenAIImageAnnotator"] = None
 
 
 def get_logger():
