@@ -11,12 +11,12 @@ from wdtagger import Tagger
 if typing.TYPE_CHECKING:
     from ai import OpenAIImageAnnotator
 
-db_path: None | Path = None
+db_path = Path()
+vec_path = Path()
 
-target_dir: Path = Path()
-pictoria_dir: Path = Path()
-thumbnails_dir: Path = Path()
-
+target_dir = Path()
+pictoria_dir = Path()
+thumbnails_dir = Path()
 should_watch = True
 stop_event = threading.Event()
 

@@ -3,6 +3,7 @@ from io import BufferedReader
 from pathlib import Path
 
 from PIL import Image
+from db import get_img_vec
 from rich.progress import Progress
 from sqlalchemy.orm import Session
 from wdtagger import Tagger
@@ -31,7 +32,6 @@ def sync_metadata():
 
 
 def _sync_metadata() -> None:
-
     os_tuples = find_files_in_directory(shared.target_dir)
 
     session = get_session()
@@ -57,7 +57,6 @@ def process_posts(*, all_posts: bool = False):
     session = get_session()
     posts = session.query(Post).all() if all_posts else session.query(Post).filter(Post.md5.is_("")).all()
     with Progress(console=shared.console) as progress:
-
         if not posts:
             logger.info("No posts to process")
             return
@@ -123,6 +122,8 @@ def _process_post(session: Session, file_abs_path: Path | None = None, post: Pos
             update_file_metadata(file_data, post, file_abs_path)
         session.add(post)
         session.commit()
+
+    threading.Thread(target=get_img_vec, args=(post,)).start()
 
     def add_tags() -> None:
         abs_path = post.absolute_path

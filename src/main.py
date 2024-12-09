@@ -25,12 +25,12 @@ from wdtagger import Tagger
 
 import shared
 from ai import OpenAIImageAnnotator
+from db import find_similar_posts, get_img_vec, init_vec_db
 from models import Post, PostHasColor, PostHasTag, Tag, TagGroup
 from processors import process_post, process_posts, set_post_colors, sync_metadata
 from scheme import PostPublic, PostWithTagPublic, TagGroupWithTagsPublic
 from utils import (
     attach_tags_to_post,
-    create_thumbnail,
     delete_by_file_path_and_ext,
     from_rating_to_int,
     get_path_name_and_extension,
@@ -51,6 +51,7 @@ async def lifespan(_: FastAPI):
     args = parse_arguments()
     initialize(args)
     sync_metadata()
+    init_vec_db()
     watch_target_dir()
     Thread(target=analyze_palettes).start()
     host = args.host or "localhost"
@@ -134,7 +135,6 @@ def v1_list_posts(
     filter: PostFilter = PostFilter(),  # noqa: A002
     ascending: bool = False,
 ):
-
     session = get_session()
     stmt = (
         apply_filtered_query(filter, select(Post))
@@ -190,7 +190,6 @@ def v1_count_group_by_rating(
     filter: PostFilter = Body(...),  # noqa: A002
     session: Session = Depends(get_session),
 ):
-
     stmt = select(Post.rating, func.count()).group_by(Post.rating)
     stmt = apply_filtered_query(filter, stmt)
     resp = session.execute(stmt).all()
@@ -292,7 +291,28 @@ def v1_update_post_caption(post_id: Annotated[int, Path(gt=0)], caption: str):
 
 @app.get("/v1/posts/{post_id}", response_model=PostWithTagPublic, tags=["Post"])
 def v1_get_post(post_id: int, session: Annotated[Session, Depends(get_session)]):
-    return get_post_by_id(post_id, session)
+    session.begin()
+    post = get_post_by_id(post_id, session)
+    session.commit()
+    return post
+
+
+@app.get("/v1/posts/{post_id}/similar", response_model=list[PostPublic], tags=["Post"])
+def v1_get_similar_posts(post_id: int, session: Annotated[Session, Depends(get_session)]):
+    session.begin()
+    post = get_post_by_id(post_id, session)
+    vec = get_img_vec(post)
+    resp = find_similar_posts(vec)
+    return [get_post_by_id(row.post_id, session) for row in resp]
+
+
+@app.post("/v1/cmd/posts/features", tags=["Command"])
+def v1_cmd_calculate_features():
+    session = get_session()
+    posts = session.query(Post).all()
+    for post in track(posts, description="Calculating features...", console=console):
+        get_img_vec(post)
+    return {"status": "ok"}
 
 
 @app.get("/v1/images/{post_path:pathlike}", tags=["Image"])

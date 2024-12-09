@@ -70,7 +70,7 @@ class Post(Base):
         String,
         Computed("file_path || '/' || file_name || '.' || extension"),
         init=False,
-        nullable=False,
+        nullable=True,
     )
     aspect_ratio: Mapped[float] = mapped_column(Float, Computed("width * 1.0 / NULLIF(height, 0)"), init=False)
 

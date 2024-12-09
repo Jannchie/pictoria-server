@@ -60,6 +60,13 @@ def prepare_paths(args: argparse.Namespace) -> None:
     shared.target_dir = get_target_dir(args)
     shared.pictoria_dir = get_pictoria_directory()
     shared.db_path = get_db_path()
+    shared.vec_path = get_vec_path()
+
+
+def get_vec_path() -> Path:
+    vec_path = shared.pictoria_dir / "vec.db"
+    logger.info(f"Vector Database path: {vec_path}")
+    return vec_path
 
 
 def use_route_names_as_operation_ids(app: FastAPI) -> None:
@@ -75,7 +82,6 @@ def use_route_names_as_operation_ids(app: FastAPI) -> None:
 
 
 def migrate_db(db_path: Path) -> None:
-
     alembic_cfg = Config("alembic.ini")
     alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
     try:
