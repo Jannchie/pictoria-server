@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from rich import get_console
 from rich.progress import track
 from sqlalchemy import Select, func, select
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session, joinedload
 from starlette.convertors import Convertor, register_url_convertor
 from starlette.middleware.gzip import GZipMiddleware
@@ -629,6 +630,34 @@ def v1_update_openai_key(key: str):
     shared.openai_key = key
     shared.pictoria_dir.joinpath("OPENAI_API_KEY").write_text(key)
     return {"status": "ok"}
+
+
+@app.post("/v1/cmd/apply-danbooru-tags", tags=["Command"])
+def v1_cmd_apply_danbooru_tags(session: Session = Depends(get_session)):
+    import json
+
+    json_path = pathlib.Path("data/tag_group_gt_100.json")
+    json_data = json.loads(json_path.read_text())
+    groups = ["artist", "meta", "character", "general", "copyright"]
+    for group in groups:
+        if not session.execute(select(TagGroup).filter(TagGroup.name == group)).scalar():
+            tag_group = TagGroup(name=group)
+            session.add(tag_group)
+    session.commit()
+
+    groups = {group: session.execute(select(TagGroup).filter(TagGroup.name == group)).scalar() for group in groups}
+    values = []
+    for group in groups:
+        for tag in json_data[f"tag_string_{group}"]:
+            values.extend([{"name": tag.replace("_", " "), "group_id": groups[group].id}])
+
+    chunk_size = 1000
+    for i in range(0, len(values), chunk_size):
+        chunk = values[i : i + chunk_size]
+        insert_stmt = insert(Tag).values(chunk)
+        update_columns = {col.name: col for col in insert_stmt.excluded}
+        session.execute(insert_stmt.on_conflict_do_update(index_elements=["name"], set_=update_columns))
+        session.commit()
 
 
 @app.get("/")

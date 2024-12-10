@@ -3,12 +3,12 @@ from io import BufferedReader
 from pathlib import Path
 
 from PIL import Image
-from db import get_img_vec
 from rich.progress import Progress
 from sqlalchemy.orm import Session
 from wdtagger import Tagger
 
 import shared
+from db import get_img_vec
 from models import Post, PostHasColor
 from shared import logger
 from tools.colors import get_palette_ints

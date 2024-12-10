@@ -28,6 +28,7 @@ class TagGroup(Base):
     __tablename__ = "tag_groups"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, nullable=False, init=False)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("tag_groups.id"), nullable=True, default=None)
     name: Mapped[str] = mapped_column(String(120), index=True, nullable=False, default="", server_default="")
     color: Mapped[str] = mapped_column(String(9), nullable=False, default="", server_default="")
 
