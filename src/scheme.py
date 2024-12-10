@@ -12,14 +12,12 @@ class TagGroupPublic(BaseModel):
 
 class TagPublic(BaseModel):
     name: str
-    count: int
 
     class Config:
         from_attributes = True
 
 
 class TagGroupWithTagsPublic(TagGroupPublic):
-
     tags: list["TagPublic"]
 
 

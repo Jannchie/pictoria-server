@@ -29,7 +29,7 @@ from ai import OpenAIImageAnnotator
 from db import find_similar_posts, get_img_vec, init_vec_db
 from models import Post, PostHasColor, PostHasTag, Tag, TagGroup
 from processors import process_post, process_posts, set_post_colors, sync_metadata
-from scheme import PostPublic, PostWithTagPublic, TagGroupWithTagsPublic
+from scheme import PostHasTagPublic, PostPublic, PostWithTagPublic, TagGroupWithTagsPublic, TagWithGroupPublic
 from utils import (
     attach_tags_to_post,
     delete_by_file_path_and_ext,
@@ -341,32 +341,25 @@ def v1_cmd_rotate_image(post_id: int, *, clockwise: bool = True, session: Sessio
     return post
 
 
-class TagAndGroupIdPublic(BaseModel):
-    name: str
-    group_id: int | None
-
-
-class TagResponse(BaseModel):
+class TagWithCountPublic(BaseModel):
     count: int
-    tag_info: TagAndGroupIdPublic
+    tag_info: TagWithGroupPublic
 
 
-@app.get("/v1/tags", response_model=list[TagResponse], tags=["Tag"])
-def v1_get_tags():
+@app.get("/v1/tags", response_model=list[TagWithCountPublic], tags=["Tag"])
+def v1_get_tags(language: str = "en"):
     session = get_session()
-    resp = session.execute(
-        select(PostHasTag.tag_name, func.count(), Tag.group_id)
-        .select_from(PostHasTag)
-        .join(Tag)
-        .group_by(PostHasTag.tag_name),
-    ).all()
-    return [
-        TagResponse(
-            count=row[1],
-            tag_info=TagAndGroupIdPublic(name=row[0], group_id=row[2]),
-        )
-        for row in resp
-    ]
+    stmt = select(Tag).options(joinedload(Tag.group))
+
+    count_stmt = select(PostHasTag.tag_name, func.count()).group_by(PostHasTag.tag_name)
+    resp = session.scalars(stmt).all()
+    count_resp = session.execute(count_stmt).all()
+    count_dict = {row[0]: row[1] for row in count_resp}
+
+    result = [TagWithCountPublic(tag_info=row, count=count_dict.get(row.name, 0)) for row in resp]
+    for row in result:
+        row.tag_info.name = shared.i18n.t(language, row.tag_info.name)
+    return result
 
 
 @app.post("/v1/tag/{tag_name}", response_model=Tag, tags=["Tag"])

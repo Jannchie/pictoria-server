@@ -40,7 +40,6 @@ class Tag(Base):
     name: Mapped[str] = mapped_column(String(120), primary_key=True, nullable=False)
     group_id: Mapped[int | None] = mapped_column(ForeignKey("tag_groups.id"), nullable=True, default=None)
     group: Mapped[Optional["TagGroup"]] = relationship(back_populates="tags", lazy="select", init=False)
-    count: Mapped[int] = mapped_column(Integer, server_default="0", default=0, nullable=False, init=False)
     posts: Mapped[list["PostHasTag"]] = relationship(
         back_populates="tag_info",
         default_factory=list,

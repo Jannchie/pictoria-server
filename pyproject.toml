@@ -72,6 +72,7 @@ ignore = [
     "ANN201",
     "B008",
     "FAST002",
+    "INP001",
 ]
 line-length = 120
 
