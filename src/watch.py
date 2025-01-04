@@ -39,10 +39,13 @@ class Handler(FileSystemEventHandler):
         self.last_event_times = {}
         self.debounce_time = debounce_time
         self.lock = threading.Lock()
-        self.engine = create_engine(f"sqlite:///{shared.db_path}", echo=False)
+        self.engine = create_engine(
+            f"sqlite:///{shared.db_path}",
+            echo=False,
+            connect_args={"timeout": 10},
+        )
 
     def on_any_event(self, event: FileSystemEvent):
-
         if event.src_path.startswith(str(shared.pictoria_dir)):
             return
         if event.is_directory:
