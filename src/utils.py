@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import os
 import sqlite3
 import sys
 import time
@@ -13,12 +14,13 @@ import wdtagger
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from PIL import Image
-from sqlalchemy import create_engine, event, insert, select
+from sqlalchemy import create_engine, insert, select
 from sqlalchemy.orm import Session, sessionmaker
 
 import shared
 from alembic import command
 from alembic.config import Config
+from db import get_vec_db
 from models import Post, PostHasTag, Tag, TagGroup
 from shared import logger
 
@@ -39,25 +41,25 @@ def timer(func: Callable[..., R]) -> Callable[..., R]:
     return wrapper
 
 
-def initialize(args: argparse.Namespace) -> None:
-    prepare_paths(args)
-    prepare_openai_api(args)
+def initialize(target_dir: os.PathLike, openai_key: str | None = None) -> None:
+    prepare_paths(Path(target_dir))
+    prepare_openai_api(openai_key)
     init_thumbnails_directory()
 
 
-def prepare_openai_api(args: argparse.Namespace) -> None:
+def prepare_openai_api(openai_key: str | None) -> None:
     if not shared.pictoria_dir:
         logger.warning("Pictoria directory not set, skipping OpenAI API key setup")
         return
     if shared.pictoria_dir.joinpath("OPENAI_API_KEY").exists():
         with shared.pictoria_dir.joinpath("OPENAI_API_KEY").open() as f:
             shared.openai_key = f.read().strip()
-    if args.openai_key:
-        shared.openai_key = args.openai_key
+    if openai_key:
+        shared.openai_key = openai_key
 
 
-def prepare_paths(args: argparse.Namespace) -> None:
-    shared.target_dir = get_target_dir(args)
+def prepare_paths(target_path: Path) -> None:
+    shared.target_dir = get_target_dir(target_path)
     shared.pictoria_dir = get_pictoria_directory()
     shared.db_path = get_db_path()
     shared.vec_path = get_vec_path()
@@ -96,7 +98,6 @@ def migrate_db(db_path: Path) -> None:
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--reload", action="store_true")
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=4777)
     parser.add_argument("--target_dir", type=str, default=".")
@@ -118,9 +119,8 @@ def validate_path(target_path: Path):
         sys.exit(1)
 
 
-def get_target_dir(args: argparse.Namespace) -> Path:
-    target_dir_str = args.target_dir
-    target_dir = Path(target_dir_str).resolve()
+def get_target_dir(target_path: Path) -> Path:
+    target_dir = target_path.resolve()
     validate_path(target_dir)
     logger.info(f"Target directory: {target_dir}")
     return target_dir
@@ -178,6 +178,12 @@ def delete_by_file_path_and_ext(session: Session, path_name_and_ext: tuple[str, 
         thumbnails_path.unlink()
     if file_path.exists():
         file_path.unlink()
+    # delete vector data
+    db = get_vec_db()
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM post_vecs WHERE post_id = ?", (path_name_and_ext[0],))
+    db.commit()
+    cursor.close()
 
 
 def add_new_files(
@@ -207,9 +213,13 @@ def load_extension(dbapi_connection: sqlite3.Connection, *args) -> None:  # noqa
 
 @cache
 def get_engine():
-    engine = create_engine(f"sqlite:///{shared.db_path}", echo=False, pool_size=100, max_overflow=200)
-    event.listen(engine, "connect", load_extension)
-    return engine
+    return create_engine(
+        f"sqlite:///{shared.db_path}",
+        echo=False,
+        pool_size=100,
+        max_overflow=200,
+        connect_args={"timeout": 10},
+    )
 
 
 def get_session():
