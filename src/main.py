@@ -3,6 +3,7 @@ import os
 import pathlib
 import shutil
 import tomllib
+from datetime import UTC, datetime
 from threading import Thread
 from typing import Annotated
 
@@ -26,10 +27,11 @@ from wdtagger import Tagger
 
 import shared
 from ai import OpenAIImageAnnotator
+from danbooru import DanbooruClient
 from db import find_similar_posts, get_img_vec, init_vec_db
 from models import Post, PostHasColor, PostHasTag, Tag, TagGroup
 from processors import process_post, process_posts, set_post_colors, sync_metadata
-from scheme import PostHasTagPublic, PostPublic, PostWithTagPublic, TagGroupWithTagsPublic, TagWithGroupPublic
+from scheme import PostPublic, PostWithTagPublic, TagGroupWithTagsPublic, TagWithGroupPublic
 from utils import (
     attach_tags_to_post,
     delete_by_file_path_and_ext,
@@ -48,15 +50,15 @@ with pathlib.Path("pyproject.toml").open("rb") as f:
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
-    args = parse_arguments()
-    initialize(args)
+async def my_lifespan(_: FastAPI):
+    initialize(target_dir="demo")
     sync_metadata()
     init_vec_db()
     watch_target_dir()
     Thread(target=analyze_palettes).start()
-    host = args.host or "localhost"
-    doc_url = f"http://{host}:{args.port}/docs"
+    host = "localhost"
+    port = 4777
+    doc_url = f"http://{host}:{port}/docs"
     shared.logger.info(f"API Document: {doc_url}")
     yield
 
@@ -77,7 +79,7 @@ app = fastapi.FastAPI(
     default_response_class=ORJSONResponse,
     title="Pictoria",
     version=pyproject["project"]["version"],
-    lifespan=lifespan,
+    lifespan=my_lifespan,
 )
 
 app.add_middleware(
@@ -106,11 +108,29 @@ register_url_convertor("pathlike", PathConvertor())
 
 
 def get_post_by_id(post_id: int, session: Session):
-    post = session.get(
-        Post,
-        post_id,
-        options=[joinedload(Post.tags).joinedload(PostHasTag.tag_info).joinedload(Tag.group)],
+    post = (
+        session.query(Post)
+        .options(joinedload(Post.tags).joinedload(PostHasTag.tag_info).joinedload(Tag.group))
+        .filter_by(id=post_id)
+        .one_or_none()
     )
+
+    def get_group_sort_key(tag: PostHasTag) -> int:
+        group_name = tag.tag_info.group.name
+        if group_name == "artist":
+            return 0
+        if group_name == "copyright":
+            return 1
+        if group_name == "character":
+            return 2
+        if group_name == "general":
+            return 3
+        if group_name == "meta":
+            return 4
+        return 1
+
+    post.tags = sorted(post.tags, key=get_group_sort_key)
+
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
     return post
@@ -653,6 +673,76 @@ def v1_cmd_apply_danbooru_tags(session: Session = Depends(get_session)):
         session.commit()
 
 
+@app.get("/v1/cmd/download-from-danbooru", tags=["Command"])
+def v1_cmd_download_from_danbooru(*, tags: str, session: Session = Depends(get_session)):
+    client = DanbooruClient("WB3aJNaTLdB8S71PauVZZTjD", "jannchie")
+    danbooru_dir = shared.target_dir / "danbooru"
+    save_dir = danbooru_dir / tags
+    posts = client.get_posts(tags=tags)
+
+    general_group_id = session.execute(select(TagGroup).filter(TagGroup.name == "general")).scalar().id
+    character_group_id = session.execute(select(TagGroup).filter(TagGroup.name == "character")).scalar().id
+    artist_group_id = session.execute(select(TagGroup).filter(TagGroup.name == "artist")).scalar().id
+    meta_group_id = session.execute(select(TagGroup).filter(TagGroup.name == "meta")).scalar().id
+
+    types = ["general", "character", "artist", "meta"]
+    type_to_group_id = {
+        "general": general_group_id,
+        "character": character_group_id,
+        "artist": artist_group_id,
+        "meta": meta_group_id,
+    }
+
+    for post in posts:
+        # file_name = str(post.id)
+        now = int(datetime.now(UTC).timestamp())
+        resp = session.execute(
+            insert(Post)
+            .values(
+                {
+                    "file_path": save_dir.relative_to(shared.target_dir).as_posix(),
+                    "file_name": str(post.id),
+                    "extension": post.file_ext,
+                    "source": f"https://danbooru.donmai.us/posts/{post.id}",
+                    "rating": from_rating_to_int(post.rating),
+                    "updated_at": now,
+                    "created_at": now,
+                },
+            )
+            .on_conflict_do_nothing()
+            .returning(Post.id),
+        )
+        post_id = resp.scalar()
+        if post_id is None:
+            continue
+        for t in types:
+            for tag_str in getattr(post, f"tag_string_{t}").split(" "):
+                tag_name = tag_str.replace("_", " ")
+                session.execute(
+                    insert(Tag)
+                    .values(
+                        {
+                            "name": tag_name,
+                            "group_id": type_to_group_id[t],
+                        },
+                    )
+                    .on_conflict_do_nothing(),
+                )
+                session.execute(
+                    insert(PostHasTag)
+                    .values(
+                        {
+                            "post_id": post_id,
+                            "tag_name": tag_name,
+                            "is_auto": False,
+                        },
+                    )
+                    .on_conflict_do_nothing(),
+                )
+    session.commit()
+    client.download_posts(posts, save_dir)
+
+
 @app.get("/")
 def root():
     return {
@@ -666,12 +756,12 @@ def root():
 use_route_names_as_operation_ids(app)
 if __name__ == "__main__":
     args = parse_arguments()
-    initialize(args)
+    initialize(target_dir=args.target_dir, openai_key=args.openai_key)
     host = args.host or "localhost"
     uvicorn.run(
         "main:app",
         host=host,
         port=args.port,
-        reload=args.reload,
+        reload=True,
         log_config=None,
     )
