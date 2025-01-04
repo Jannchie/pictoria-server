@@ -160,9 +160,10 @@ class Post(Base):
 class PostHasTag(Base):
     __tablename__ = "post_has_tag"
 
-    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True)
-    tag_name: Mapped[str] = mapped_column(ForeignKey("tags.name"), primary_key=True)
-    is_auto: Mapped[bool] = mapped_column(Boolean, default=False)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True, init=False)
+    tag_name: Mapped[str] = mapped_column(ForeignKey("tags.name"), primary_key=True, init=False)
 
-    post: Mapped["Post"] = relationship(back_populates="tags", lazy="select", init=False)
-    tag_info: Mapped["Tag"] = relationship(back_populates="posts", lazy="select", init=False)
+    post: Mapped["Post"] = relationship(back_populates="tags", lazy="select")
+    tag_info: Mapped["Tag"] = relationship(back_populates="posts", lazy="select")
+
+    is_auto: Mapped[bool] = mapped_column(Boolean, default=False)
