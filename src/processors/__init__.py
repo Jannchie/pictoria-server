@@ -4,8 +4,6 @@ from pathlib import Path
 
 from PIL import Image
 from rich.progress import Progress
-from sqlalchemy.orm import Session
-from wdtagger import Tagger
 
 import shared
 from db import get_img_vec
@@ -20,6 +18,7 @@ from utils import (
     from_rating_to_int,
     get_path_name_and_extension,
     get_session,
+    get_tagger,
     remove_deleted_files,
     update_file_metadata,
 )
@@ -55,7 +54,7 @@ def process_posts(*, all_posts: bool = False):
     """
     target_dir = shared.target_dir
     session = get_session()
-    posts = session.query(Post).all() if all_posts else session.query(Post).filter(Post.md5.is_("")).all()
+    posts = session.query(Post).all() if all_posts else session.query(Post).filter(Post.md5 == "").all()
     with Progress(console=shared.console) as progress:
         if not posts:
             logger.info("No posts to process")
@@ -64,78 +63,75 @@ def process_posts(*, all_posts: bool = False):
         for post in posts:
             # 构建文件的完整路径。
             file_abs_path = target_dir / post.file_path / f"{post.file_name}.{post.extension}"
-            process_post(session, file_abs_path, post)
+            process_post(file_abs_path)
             progress.update(task, advance=1)
 
 
 process_post_lock = threading.Lock()
 
 
-def process_post(session: Session, file_abs_path: Path | None = None, post: Post | None = None):
+def process_post(file_abs_path: Path | None = None):
     with process_post_lock:
-        _process_post(session, file_abs_path, post)
+        _process_post(file_abs_path)
 
 
-def _process_post(session: Session, file_abs_path: Path | None = None, post: Post | None = None) -> None:
-    if post is None:
+def _process_post(file_abs_path: Path | None = None) -> None:
+    with get_session() as session:
         file_path, file_name, extension = get_path_name_and_extension(file_abs_path)
         post = (
             session.query(Post)
             .filter(Post.file_path == file_path, Post.file_name == file_name, Post.extension == extension)
             .first()
         )
-    if post is None:
-        logger.info(f"Post not found in database: {file_abs_path}")
-        return
-    if post.md5:
-        logger.info(f"Skipping post: {file_abs_path}")
-        return
-    file_data = None
-    try:
-        if file_abs_path is None:
-            file_abs_path = shared.target_dir / post.file_path / post.file_name
-            file_abs_path = file_abs_path.with_suffix(f".{post.extension}")
-        if file_abs_path.suffix.lower() not in [
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".gif",
-            ".webp",
-            ".avif",
-        ]:
-            logger.debug(f"Skipping not image file: {file_abs_path}")
+        if post is None:
+            logger.info(f"Post not found in database: {file_abs_path}")
             return
-        logger.info(f"Processing post: {file_abs_path}")
-        with file_abs_path.open("rb") as file:
-            file_data = file.read()
-            file.seek(0)  # 重置文件指针位置
-            with Image.open(file) as img:
-                compute_image_properties(img, post, file_abs_path)
-            file.seek(0)
-            set_post_colors(post, file)
+        if post.md5:
+            logger.info(f"Skipping post: {file_abs_path}")
+            return
+        file_data = None
+        try:
+            if file_abs_path is None:
+                file_abs_path = shared.target_dir / post.file_path / post.file_name
+                file_abs_path = file_abs_path.with_suffix(f".{post.extension}")
+            if file_abs_path.suffix.lower() not in [
+                ".jpg",
+                ".jpeg",
+                ".png",
+                ".gif",
+                ".webp",
+                ".avif",
+            ]:
+                logger.debug(f"Skipping not image file: {file_abs_path}")
+                return
+            logger.info(f"Processing post: {file_abs_path}")
+            with file_abs_path.open("rb") as file:
+                file_data = file.read()
+                file.seek(0)  # 重置文件指针位置
+                with Image.open(file) as img:
+                    compute_image_properties(img, post, file_abs_path)
+                file.seek(0)
+                set_post_colors(post, file)
+        except Exception as e:
+            if file_data:
+                file_abs_path.unlink()
+            logger.warning(f"Error processing file: {file_abs_path}")
+            logger.exception(e)
+            session.rollback()
+            return
 
-    except Exception as e:
-        logger.warning(f"Error processing file: {file_abs_path}")
-        logger.exception(e)
-    finally:
         if file_data:
             update_file_metadata(file_data, post, file_abs_path)
         session.add(post)
-        session.commit()
-
-    threading.Thread(target=get_img_vec, args=(post,)).start()
-
-    def add_tags() -> None:
+        get_img_vec(post)
         abs_path = post.absolute_path
-        if shared.tagger is None:
-            shared.tagger = Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3")
-        resp = shared.tagger.tag(abs_path)
+        tagger = get_tagger()
+        resp = tagger.tag(abs_path)
         logger.info(resp)
-        post.rating = from_rating_to_int(resp.rating)
+        if post.rating == 0:
+            post.rating = from_rating_to_int(resp.rating)
         attach_tags_to_post(session, post, resp, is_auto=True)
         session.commit()
-
-    threading.Thread(target=add_tags).start()
 
 
 def set_post_colors(post: Post, file: None | BufferedReader = None):
