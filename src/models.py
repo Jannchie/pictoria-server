@@ -5,6 +5,7 @@ from typing import Optional
 
 from PIL import Image
 from sqlalchemy import Boolean, Computed, Float, ForeignKey, Index, Integer, String
+from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -28,7 +29,7 @@ class TagGroup(Base):
     __tablename__ = "tag_groups"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, nullable=False, init=False)
-    parent_id: Mapped[int | None] = mapped_column(ForeignKey("tag_groups.id"), nullable=True, default=None)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("tag_groups.id", ondelete="SET NULL"), nullable=True, default=None)
     name: Mapped[str] = mapped_column(String(120), index=True, nullable=False, default="", server_default="")
     color: Mapped[str] = mapped_column(String(9), nullable=False, default="", server_default="")
 
@@ -38,20 +39,15 @@ class TagGroup(Base):
 class Tag(Base):
     __tablename__ = "tags"
     name: Mapped[str] = mapped_column(String(120), primary_key=True, nullable=False)
-    group_id: Mapped[int | None] = mapped_column(ForeignKey("tag_groups.id"), nullable=True, default=None)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("tag_groups.id", ondelete="SET NULL"), nullable=True, default=None)
     group: Mapped[Optional["TagGroup"]] = relationship(back_populates="tags", lazy="select", init=False)
-    posts: Mapped[list["PostHasTag"]] = relationship(
-        back_populates="tag_info",
-        default_factory=list,
-        lazy="select",
-        init=False,
-    )
+    posts: Mapped[list["PostHasTag"]] = relationship(back_populates="tag_info", default_factory=list, lazy="select", init=False)
 
 
 class PostHasColor(Base):
     __tablename__ = "post_has_color"
 
-    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), primary_key=True)
     order: Mapped[int] = mapped_column(Integer, primary_key=True)
     color: Mapped[int] = mapped_column(Integer, nullable=False)
     post: Mapped["Post"] = relationship(back_populates="colors", init=False)
@@ -72,23 +68,23 @@ class Post(Base):
         init=False,
         nullable=True,
     )
-    aspect_ratio: Mapped[float] = mapped_column(Float, Computed("width * 1.0 / NULLIF(height, 0)"), init=False)
+    aspect_ratio: Mapped[float | None] = mapped_column(Float, Computed("width * 1.0 / NULLIF(height, 0)"), init=False)
 
     width: Mapped[int | None] = mapped_column(Integer, nullable=False, index=True, default=0, server_default="0")
     height: Mapped[int | None] = mapped_column(Integer, nullable=False, index=True, default=0, server_default="0")
 
-    updated_at: Mapped[int] = mapped_column(
-        Integer,
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP,
         nullable=False,
         index=True,
-        default_factory=lambda: int(datetime.now(UTC).timestamp()),
-        onupdate=int(datetime.now(UTC).timestamp()),
+        default_factory=lambda: datetime.now(UTC),
+        onupdate=datetime.now(UTC),
     )
-    created_at: Mapped[int] = mapped_column(
-        Integer,
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP,
         nullable=False,
         index=True,
-        default_factory=lambda: int(datetime.now(UTC).timestamp()),
+        default_factory=lambda: datetime.now(UTC),
     )
     score: Mapped[int] = mapped_column(Integer, default=0, index=True, server_default="0")
     rating: Mapped[int] = mapped_column(Integer, default=0, index=True, server_default="0")
@@ -160,8 +156,8 @@ class Post(Base):
 class PostHasTag(Base):
     __tablename__ = "post_has_tag"
 
-    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True, init=False)
-    tag_name: Mapped[str] = mapped_column(ForeignKey("tags.name"), primary_key=True, init=False)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), primary_key=True, init=False)
+    tag_name: Mapped[str] = mapped_column(ForeignKey("tags.name", ondelete="CASCADE"), primary_key=True, init=False)
 
     post: Mapped["Post"] = relationship(back_populates="tags", lazy="select")
     tag_info: Mapped["Tag"] = relationship(back_populates="posts", lazy="select")

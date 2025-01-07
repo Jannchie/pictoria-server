@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -47,8 +49,8 @@ class PostPublic(BaseModel):
     width: int | None
     height: int | None
     aspect_ratio: float | None
-    updated_at: int
-    created_at: int
+    updated_at: datetime
+    created_at: datetime
     score: int
     rating: int
     description: str

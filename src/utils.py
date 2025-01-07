@@ -3,6 +3,7 @@ import hashlib
 import os
 import sqlite3
 import sys
+import threading
 import time
 from collections.abc import Callable
 from functools import cache, wraps
@@ -213,6 +214,9 @@ def load_extension(dbapi_connection: sqlite3.Connection, *args) -> None:  # noqa
 
 @cache
 def get_engine():
+    db_url = os.environ.get("DB_URL")
+    if db_url:
+        return create_engine(db_url, echo=False, pool_size=100, max_overflow=200)
     return create_engine(
         f"sqlite:///{shared.db_path}",
         echo=False,
@@ -435,3 +439,16 @@ def attach_tags_to_post(session: Session, post: Post, resp: wdtagger.Result, *, 
 
     session.add(post)
     session.commit()
+
+
+@cache
+def _get_tagger() -> wdtagger.Tagger:
+    return wdtagger.Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3")
+
+
+lock = threading.Lock()
+
+
+def get_tagger():
+    with lock:
+        return _get_tagger()

@@ -7,7 +7,6 @@ from typing import Literal, Optional
 
 from rich import get_console
 from rich.logging import RichHandler
-from wdtagger import Tagger
 
 if typing.TYPE_CHECKING:
     from ai import OpenAIImageAnnotator
@@ -60,5 +59,3 @@ class I18N:
 i18n = I18N()
 
 logger = get_logger()
-
-tagger: Tagger | None = None

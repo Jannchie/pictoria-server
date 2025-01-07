@@ -4,13 +4,13 @@ import pathlib
 import shutil
 import tomllib
 from datetime import UTC, datetime
-from threading import Thread
 from typing import Annotated
 
 import fastapi
 import httpx
 import pillow_avif  # noqa: F401
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Path, UploadFile
 from fastapi.concurrency import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,7 +23,6 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session, joinedload
 from starlette.convertors import Convertor, register_url_convertor
 from starlette.middleware.gzip import GZipMiddleware
-from wdtagger import Tagger
 
 import shared
 from ai import OpenAIImageAnnotator
@@ -34,16 +33,19 @@ from processors import process_post, process_posts, set_post_colors, sync_metada
 from scheme import PostPublic, PostWithTagPublic, TagGroupWithTagsPublic, TagWithGroupPublic
 from utils import (
     attach_tags_to_post,
+    create_thumbnail,
     delete_by_file_path_and_ext,
     from_rating_to_int,
     get_path_name_and_extension,
     get_session,
+    get_tagger,
     initialize,
     logger,
     parse_arguments,
     use_route_names_as_operation_ids,
 )
-from watch import watch_target_dir
+
+# from watch import watch_target_dir
 
 with pathlib.Path("pyproject.toml").open("rb") as f:
     pyproject = tomllib.load(f)
@@ -51,11 +53,11 @@ with pathlib.Path("pyproject.toml").open("rb") as f:
 
 @asynccontextmanager
 async def my_lifespan(_: FastAPI):
+    load_dotenv()
     initialize(target_dir="demo")
     sync_metadata()
     init_vec_db()
-    watch_target_dir()
-    Thread(target=analyze_palettes).start()
+    # watch_target_dir()
     host = "localhost"
     port = 4777
     doc_url = f"http://{host}:{port}/docs"
@@ -69,9 +71,13 @@ def analyze_palettes():
             select(Post).outerjoin(PostHasColor).where(Post.width > 0, PostHasColor.color.is_(None)),
         ).all()
         for post in track(posts, description="Analyzing palettes...", console=console):
-            set_post_colors(post)
-            session.add(post)
-            session.commit()
+            try:
+                set_post_colors(post)
+                session.add(post)
+                session.commit()
+            except Exception as e:
+                logger.exception(e)
+                session.rollback()
 
 
 console = get_console()
@@ -108,14 +114,11 @@ register_url_convertor("pathlike", PathConvertor())
 
 
 def get_post_by_id(post_id: int, session: Session):
-    post = (
-        session.query(Post)
-        .options(joinedload(Post.tags).joinedload(PostHasTag.tag_info).joinedload(Tag.group))
-        .filter_by(id=post_id)
-        .one_or_none()
-    )
+    post = session.query(Post).options(joinedload(Post.tags).joinedload(PostHasTag.tag_info).joinedload(Tag.group)).filter_by(id=post_id).one_or_none()
 
-    def get_group_sort_key(tag: PostHasTag) -> int:
+    def get_group_sort_key(tag: PostHasTag) -> int:  # noqa: PLR0911
+        if tag.tag_info.group is None:
+            return 1
         group_name = tag.tag_info.group.name
         if group_name == "artist":
             return 0
@@ -157,12 +160,7 @@ def v1_list_posts(
     ascending: bool = False,
 ):
     session = get_session()
-    stmt = (
-        apply_filtered_query(filter, select(Post))
-        .order_by(Post.id.asc() if ascending else Post.id.desc())
-        .limit(limit)
-        .offset(offset)
-    )
+    stmt = apply_filtered_query(filter, select(Post)).order_by(Post.id.asc() if ascending else Post.id.desc()).limit(limit).offset(offset)
     return session.scalars(stmt)
 
 
@@ -346,10 +344,11 @@ async def v1_get_post_by_path(post_path: str) -> fastapi.responses.FileResponse:
 
 @app.get("/v1/thumbnails/{post_path:pathlike}", tags=["Image"])
 async def v1_get_thumbnail(post_path: str) -> fastapi.responses.FileResponse:
-    if not shared.thumbnails_dir:
-        raise HTTPException(status_code=400, detail="Thumbnails directory is not set")
-    abs_path = shared.thumbnails_dir / post_path
-    return fastapi.responses.FileResponse(abs_path)
+    thumbnail_file_path = shared.thumbnails_dir / post_path
+    original_file_path = shared.target_dir / post_path
+    if not thumbnail_file_path.exists():
+        create_thumbnail(original_file_path, thumbnail_file_path)
+    return fastapi.responses.FileResponse(thumbnail_file_path)
 
 
 @app.put("/v1/cmd/posts/{post_id}/rotate", response_model=PostPublic, tags=["Command"])
@@ -435,7 +434,7 @@ def v1_add_tag_to_post(post_id: int, tag_name: str):
     # )
     post_has_tag = session.get(PostHasTag, (post_id, tag_name))
     if post_has_tag is None:
-        post_has_tag = PostHasTag(post_id=post_id, tag_name=tag_name)
+        post_has_tag = PostHasTag(post=post, tag_info=tag, is_auto=False)
         session.add(post_has_tag)
         session.commit()
     return get_post_by_id(post_id, session)
@@ -481,9 +480,8 @@ def v1_cmd_auto_tags(post_id: int, session: Annotated[Session, Depends(get_sessi
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
     abs_path = post.absolute_path
-    if shared.tagger is None:
-        shared.tagger = Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3")
-    resp = shared.tagger.tag(abs_path)
+    tagger = get_tagger()
+    resp = tagger.tag(abs_path)
     logger.info(resp)
     post.rating = from_rating_to_int(resp.rating)
     attach_tags_to_post(session, post, resp, is_auto=True)
@@ -495,14 +493,13 @@ def v1_cmd_auto_tags(post_id: int, session: Annotated[Session, Depends(get_sessi
 @app.get("/v1/cmd/auto-tags", tags=["Command"])
 def v1_cmd_auto_tags_all(session: Annotated[Session, Depends(get_session)]):
     posts = session.query(Post).all()
-    if shared.tagger is None:
-        shared.tagger = Tagger(model_repo="SmilingWolf/wd-vit-large-tagger-v3")
+    tagger = get_tagger()
 
     # 使用 rich 进度条
     for post in track(posts, description="Processing posts...", console=console):
         try:
             abs_path = post.absolute_path
-            resp = shared.tagger.tag(abs_path)
+            resp = tagger.tag(abs_path)
             post.rating = from_rating_to_int(resp.rating)
             attach_tags_to_post(session, post, resp, is_auto=True)
         except Exception as e:
@@ -604,7 +601,7 @@ def v1_upload_file(
         raise HTTPException(status_code=400, detail="Either file or url must be provided")
     if file is None:
         headers = {
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",  # noqa: E501
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
         }
         if url and "pximg.net" in url:
             headers["referer"] = "https://www.pixiv.net/"
@@ -634,7 +631,7 @@ def v1_upload_file(
     session.refresh(post)
     with abs_path.open("wb") as f:
         shutil.copyfileobj(file_io, f)
-    process_post(session, abs_path, post)
+    process_post(abs_path, post)
     return ORJSONResponse(content={"filename": path})
 
 
@@ -662,7 +659,9 @@ def v1_cmd_apply_danbooru_tags(session: Session = Depends(get_session)):
     values = []
     for group in groups:
         for tag in json_data[f"tag_string_{group}"]:
-            values.extend([{"name": tag.replace("_", " "), "group_id": groups[group].id}])
+            values.extend(
+                [{"name": tag.replace("_", " ").replace("(", R"\(").replace(")", R"\)"), "group_id": groups[group].id}],
+            )
 
     chunk_size = 1000
     for i in range(0, len(values), chunk_size):
@@ -675,10 +674,12 @@ def v1_cmd_apply_danbooru_tags(session: Session = Depends(get_session)):
 
 @app.get("/v1/cmd/download-from-danbooru", tags=["Command"])
 def v1_cmd_download_from_danbooru(*, tags: str, session: Session = Depends(get_session)):
-    client = DanbooruClient("WB3aJNaTLdB8S71PauVZZTjD", "jannchie")
+    client = DanbooruClient(os.getenv("DANBOORU_API_KEY"), os.getenv("DANBOORU_USER_NAME"))
     danbooru_dir = shared.target_dir / "danbooru"
     save_dir = danbooru_dir / tags
-    posts = client.get_posts(tags=tags)
+    posts_orig = client.get_posts(tags=tags, limit=99999)
+    posts = [post for post in posts_orig if post.file_url]
+    logger.info(f"Fetched {len(posts)} avaliable posts ({len(posts_orig)} total)")
 
     general_group_id = session.execute(select(TagGroup).filter(TagGroup.name == "general")).scalar().id
     character_group_id = session.execute(select(TagGroup).filter(TagGroup.name == "character")).scalar().id
@@ -694,8 +695,9 @@ def v1_cmd_download_from_danbooru(*, tags: str, session: Session = Depends(get_s
     }
 
     for post in posts:
-        # file_name = str(post.id)
-        now = int(datetime.now(UTC).timestamp())
+        if not post.file_url:
+            continue
+        now = datetime.now(UTC)
         resp = session.execute(
             insert(Post)
             .values(
@@ -741,6 +743,7 @@ def v1_cmd_download_from_danbooru(*, tags: str, session: Session = Depends(get_s
                 )
     session.commit()
     client.download_posts(posts, save_dir)
+    process_posts()
 
 
 @app.get("/")

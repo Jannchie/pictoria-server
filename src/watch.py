@@ -10,7 +10,7 @@ from watchdog.observers import Observer
 import shared
 from processors import process_post
 from shared import logger
-from utils import get_session, remove_post, remove_post_in_path
+from utils import remove_post, remove_post_in_path
 
 
 class Watcher:
@@ -60,19 +60,18 @@ class Handler(FileSystemEventHandler):
             self.last_event_times[event_key] = current_time
 
         try:
-            session = get_session()
             if event.event_type == "created":
                 logger.debug(f"Received created event - {event.src_path}")
-                process_post(session, Path(event.src_path))
+                process_post(Path(event.src_path))
             elif event.event_type == "modified":
                 logger.debug(f"Received modified event - {event.src_path}")
-                process_post(session, Path(event.src_path))
+                process_post(Path(event.src_path))
             elif event.event_type == "deleted":
                 logger.debug(f"Received deleted event - {event.src_path}")
                 if Path(event.src_path).is_file():
-                    remove_post(session, Path(event.src_path))
+                    remove_post(Path(event.src_path))
                 else:
-                    remove_post_in_path(session, Path(event.src_path))
+                    remove_post_in_path(Path(event.src_path))
             # self.sync_metadata_folder()
         except Exception as e:
             logger.error(f"Error processing event: {event}")
