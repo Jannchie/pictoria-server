@@ -28,6 +28,8 @@ dependencies = [
     "datasets>=3.1.0",
     "sqlite-vec>=0.1.6",
     "accelerate>=1.2.0",
+    "python-dotenv>=1.0.1",
+    "psycopg[binary]>=3.2.3",
 ]
 
 requires-python = ">=3.11"
@@ -58,7 +60,7 @@ reportArgumentType = "none"
 
 [tool.ruff]
 select = ["ALL"]
-exclude = ["alembic"]
+exclude = ["alembic", ".venv"]
 ignore = [
     "PGH",
     "RUF003",
@@ -74,7 +76,7 @@ ignore = [
     "FAST002",
     "INP001",
 ]
-line-length = 120
+line-length = 160
 
 [tool.uv]
 package = true
