@@ -1,17 +1,25 @@
+import math
 from io import BufferedReader
+from os import PathLike
 from pathlib import Path
 
 import numpy as np
-from colorthief import ColorThief
+import PIL.Image
 from matplotlib import pyplot as plt
 
 from utils import timer
 
+from .colorthief import ColorThief
+
 
 @timer
-def get_palette(image_path: Path, *, colors: int = 5) -> tuple[tuple[int, int, int], ...]:
-    color_thief = ColorThief(image_path)
-    return tuple(color_thief.get_palette(color_count=colors, quality=4))
+def get_palette(image: PathLike | BufferedReader, *, colors: int = 5) -> tuple[tuple[int, int, int], ...]:
+    image = PIL.Image.open(image)
+    width, height = image.size
+    target_points = 10000
+    quality = int(math.sqrt((width * height) / target_points))
+    color_thief = ColorThief(image)
+    return tuple(color_thief.get_palette(color_count=colors, quality=quality))
 
 
 def rgb2int(rgb: tuple[int, int, int]) -> int:
@@ -36,7 +44,7 @@ def show_palette(palette: tuple[tuple[int, int, int]]) -> None:
     plt.show()
 
 
-def get_palette_ints(image: Path | BufferedReader, *, colors: int = 5) -> tuple[int, ...]:
+def get_palette_ints(image: PathLike | BufferedReader, *, colors: int = 5) -> tuple[int, ...]:
     return tuple(rgb2int(rgb) for rgb in get_palette(image, colors=colors))
 
 
