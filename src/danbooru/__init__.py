@@ -24,17 +24,17 @@ class MediaAsset(BaseModel):
     id: int
     created_at: datetime
     updated_at: datetime
-    md5: str
+    md5: str | None = None
     file_ext: str
     file_size: int
     image_width: int
     image_height: int
     duration: int | None = None
     status: str
-    file_key: str
+    file_key: str | None = None
     is_public: bool
     pixel_hash: str
-    variants: list[Variant]
+    variants: list[Variant] | None = None
 
 
 class DanbooruPost(BaseModel):
@@ -42,8 +42,8 @@ class DanbooruPost(BaseModel):
     created_at: datetime
     uploader_id: int
     score: int
-    source: HttpUrl | None = None
-    md5: str
+    source: str | None = None
+    md5: str | None = None
     last_comment_bumped_at: datetime | None = None
     rating: str
     image_width: int
@@ -81,9 +81,9 @@ class DanbooruPost(BaseModel):
     tag_string_copyright: str
     tag_string_artist: str
     tag_string_meta: str
-    file_url: HttpUrl
-    large_file_url: HttpUrl
-    preview_file_url: HttpUrl
+    file_url: HttpUrl | None = None
+    large_file_url: HttpUrl | None = None
+    preview_file_url: HttpUrl | None = None
 
 
 class DanbooruClient:
@@ -104,7 +104,7 @@ class DanbooruClient:
         value: str | int | None = None,
         tags: str | None = None,
         limit: int = 10,
-        after_id: int | None = None,
+        before_id: int | None = None,
         only: str | list[str] | None = None,
     ) -> list[DanbooruPost]:
         url: str = f"{self.base_url}/posts.json"
@@ -121,7 +121,7 @@ class DanbooruClient:
                 "limit": current_limit,
                 "api_key": self.api_key,
                 "login": self.user_id,
-                "page": f"a{after_id}" if after_id else None,
+                "page": f"b{before_id}" if before_id else None,
                 "tags": tags,
                 "only": only_str,
             }
@@ -136,31 +136,45 @@ class DanbooruClient:
                 break
 
             all_posts.extend(posts)
-            after_id = max(post["id"] for post in posts)
+            before_id = min(post["id"] for post in posts)
             if len(all_posts) >= limit:
                 break
-        return [DanbooruPost(**post) for post in all_posts]
+        res = []
+        for post in all_posts:
+            try:
+                res.append(DanbooruPost(**post))
+            except Exception:
+                logger.exception(post)
+                logger.exception("Failed to parse posts")
+        return res
 
-    def download_image(self, post: DanbooruPost, target_dir: str) -> None:
-        url = str(post.file_url)
-        if url is None:
+    def download_image(self, post: DanbooruPost, target_dir: str, retries: int = 3) -> None:
+        if post.file_url is None:
             return
-
+        url = str(post.file_url)
         post_id: int = post.id
-        try:
-            logger.debug("Downloading post %s", post.id)
-            ext = post.file_ext
-            file_path = Path(target_dir) / f"{post_id}.{ext}"
-
-            with httpx.stream("GET", url) as response:
-                response.raise_for_status()
-                with file_path.open("wb") as f:
-                    for chunk in response.iter_bytes():
-                        f.write(chunk)
-        except httpx.HTTPError:
-            logger.exception("Download failed for post %s", post_id)
-        except Exception:
-            logger.exception("Failed to download post %s", post_id)
+        attempt = 0
+        while attempt < retries:
+            try:
+                logger.debug("Downloading post %s, attempt %d", post.id, attempt + 1)
+                ext = post.file_ext
+                file_path = Path(target_dir) / f"{post_id}.{ext}"
+                if file_path.exists():
+                    logger.debug("File %s already exists, skipping", file_path)
+                    return
+                with httpx.stream("GET", url) as response:
+                    response.raise_for_status()
+                    with file_path.open("wb") as f:
+                        for chunk in response.iter_bytes():
+                            f.write(chunk)
+            except httpx.HTTPError:
+                logger.exception("Download failed for post %s on attempt %d", post_id, attempt + 1)
+            except Exception:
+                logger.exception("Failed to download post %s on attempt %d", post_id, attempt + 1)
+            else:
+                return
+            attempt += 1
+        logger.error("All attempts to download post %s have failed", post_id)
 
     def download_by_id(self, post_id: int, target_dir: str) -> None:
         post: dict = self.get_post(post_id)
