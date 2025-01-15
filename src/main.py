@@ -115,7 +115,8 @@ register_url_convertor("pathlike", PathConvertor())
 
 def get_post_by_id(post_id: int, session: Session):
     post = session.query(Post).options(joinedload(Post.tags).joinedload(PostHasTag.tag_info).joinedload(Tag.group)).filter_by(id=post_id).one_or_none()
-
+    if not post:
+        return None
     def get_group_sort_key(tag: PostHasTag) -> int:  # noqa: PLR0911
         if tag.tag_info.group is None:
             return 1
@@ -709,9 +710,18 @@ def v1_cmd_download_from_danbooru(*, tags: str, session: Session = Depends(get_s
                     "rating": from_rating_to_int(post.rating),
                     "updated_at": now,
                     "created_at": now,
+                    "published_at": post.created_at,
                 },
             )
-            .on_conflict_do_nothing()
+            .on_conflict_do_update(
+                index_elements=["file_path", "file_name", "extension"],
+                set_={
+                    "rating": from_rating_to_int(post.rating),
+                    "updated_at": now,
+                    "published_at": post.created_at,
+                    "source": f"https://danbooru.donmai.us/posts/{post.id}",
+                },
+            )
             .returning(Post.id),
         )
         post_id = resp.scalar()

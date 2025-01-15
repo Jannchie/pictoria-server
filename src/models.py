@@ -86,6 +86,7 @@ class Post(Base):
         index=True,
         default_factory=lambda: datetime.now(UTC),
     )
+    published_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True, index=True, default=None)
     score: Mapped[int] = mapped_column(Integer, default=0, index=True, server_default="0")
     rating: Mapped[int] = mapped_column(Integer, default=0, index=True, server_default="0")
 

@@ -29,7 +29,7 @@ class MediaAsset(BaseModel):
     file_size: int
     image_width: int
     image_height: int
-    duration: int | None = None
+    duration: int | float | None = None
     status: str
     file_key: str | None = None
     is_public: bool

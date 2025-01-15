@@ -60,6 +60,7 @@ class PostPublic(BaseModel):
     source: str
     caption: str
     colors: list[PostHasColorPublic]
+    published_at: datetime | None
 
     class Config:
         from_attributes = True
