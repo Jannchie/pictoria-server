@@ -2,7 +2,6 @@ import sqlite3
 from pathlib import Path
 
 import numpy as np
-import sqlite_vec
 from pydantic import BaseModel
 
 import shared
@@ -15,6 +14,7 @@ INIT_SQL = """CREATE VIRTUAL TABLE IF NOT EXISTS post_vecs USING vec0(
 
 
 def get_vec_db():
+    import sqlite_vec
     db = sqlite3.connect(shared.vec_path)
     db.enable_load_extension(True)  # noqa: FBT003
     sqlite_vec.load(db)

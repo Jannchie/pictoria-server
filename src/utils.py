@@ -10,7 +10,6 @@ from functools import cache, wraps
 from pathlib import Path
 from typing import Any, TypeVar
 
-import sqlite_vec
 import wdtagger
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
@@ -205,6 +204,7 @@ def add_new_files(
 def load_extension(dbapi_connection: sqlite3.Connection, *args) -> None:  # noqa: ANN002, ARG001
     # 只有当使用 SQLite 时才可以加载扩展
     if isinstance(dbapi_connection, sqlite3.Connection):
+        import sqlite_vec
         logger.info("Loading SQLite extensions")
         dbapi_connection.enable_load_extension(True)  # noqa: FBT003
         sqlite_vec.load(dbapi_connection)
