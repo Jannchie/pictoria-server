@@ -698,12 +698,16 @@ def v1_cmd_download_from_danbooru(*, tags: str, session: Session = Depends(get_s
     for post in posts:
         if not post.file_url:
             continue
+        
         now = datetime.now(UTC)
+        file_path = save_dir.relative_to(shared.target_dir).as_posix()
+        if not save_dir.exists():
+            save_dir.mkdir(parents=True, exist_ok=True)
         resp = session.execute(
             insert(Post)
             .values(
                 {
-                    "file_path": save_dir.relative_to(shared.target_dir).as_posix(),
+                    "file_path": file_path,
                     "file_name": str(post.id),
                     "extension": post.file_ext,
                     "source": f"https://danbooru.donmai.us/posts/{post.id}",

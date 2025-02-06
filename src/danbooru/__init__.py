@@ -153,8 +153,7 @@ class DanbooruClient:
             return
         url = str(post.file_url)
         post_id: int = post.id
-        attempt = 0
-        while attempt < retries:
+        for attempt in range(retries):
             try:
                 logger.debug("Downloading post %s, attempt %d", post.id, attempt + 1)
                 ext = post.file_ext
@@ -167,14 +166,11 @@ class DanbooruClient:
                     with file_path.open("wb") as f:
                         for chunk in response.iter_bytes():
                             f.write(chunk)
-            except httpx.HTTPError:
-                logger.exception("Download failed for post %s on attempt %d", post_id, attempt + 1)
             except Exception:
-                logger.exception("Failed to download post %s on attempt %d", post_id, attempt + 1)
+                logger.error("Failed to download post %s on attempt %d", post_id, attempt + 1)
             else:
                 return
-            attempt += 1
-        logger.error("All attempts to download post %s have failed", post_id)
+        logger.exception("All attempts to download post %s have failed", post_id)
 
     def download_by_id(self, post_id: int, target_dir: str) -> None:
         post: dict = self.get_post(post_id)
