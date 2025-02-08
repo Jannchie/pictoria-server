@@ -78,11 +78,7 @@ def process_post(file_abs_path: Path | None = None):
 def _process_post(file_abs_path: Path | None = None) -> None:
     with get_session() as session:
         file_path, file_name, extension = get_path_name_and_extension(file_abs_path)
-        post = (
-            session.query(Post)
-            .filter(Post.file_path == file_path, Post.file_name == file_name, Post.extension == extension)
-            .first()
-        )
+        post = session.query(Post).filter(Post.file_path == file_path, Post.file_name == file_name, Post.extension == extension).first()
         if post is None:
             logger.info(f"Post not found in database: {file_abs_path}")
             return

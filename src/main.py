@@ -114,9 +114,11 @@ register_url_convertor("pathlike", PathConvertor())
 
 
 def get_post_by_id(post_id: int, session: Session):
+    # sourcery skip: assign-if-exp, reintroduce-else
     post = session.query(Post).options(joinedload(Post.tags).joinedload(PostHasTag.tag_info).joinedload(Tag.group)).filter_by(id=post_id).one_or_none()
     if not post:
         return None
+
     def get_group_sort_key(tag: PostHasTag) -> int:  # noqa: PLR0911
         if tag.tag_info.group is None:
             return 1
@@ -698,7 +700,7 @@ def v1_cmd_download_from_danbooru(*, tags: str, session: Session = Depends(get_s
     for post in posts:
         if not post.file_url:
             continue
-        
+
         now = datetime.now(UTC)
         file_path = save_dir.relative_to(shared.target_dir).as_posix()
         if not save_dir.exists():

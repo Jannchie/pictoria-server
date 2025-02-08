@@ -205,6 +205,7 @@ def load_extension(dbapi_connection: sqlite3.Connection, *args) -> None:  # noqa
     # 只有当使用 SQLite 时才可以加载扩展
     if isinstance(dbapi_connection, sqlite3.Connection):
         import sqlite_vec
+
         logger.info("Loading SQLite extensions")
         dbapi_connection.enable_load_extension(True)  # noqa: FBT003
         sqlite_vec.load(dbapi_connection)
@@ -326,11 +327,7 @@ def remove_post(
 ):
     if post is None:
         file_path, file_name, extension = get_path_name_and_extension(file_abs_path)
-        post = (
-            session.query(Post)
-            .filter(Post.file_path == file_path, Post.file_name == file_name, Post.extension == extension)
-            .first()
-        )
+        post = session.query(Post).filter(Post.file_path == file_path, Post.file_name == file_name, Post.extension == extension).first()
     else:
         file_abs_path = shared.target_dir / post.file_path
         file_abs_path = file_abs_path.with_suffix(f".{post.extension}")

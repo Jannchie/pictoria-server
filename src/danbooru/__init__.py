@@ -167,7 +167,7 @@ class DanbooruClient:
                         for chunk in response.iter_bytes():
                             f.write(chunk)
             except Exception:
-                logger.error("Failed to download post %s on attempt %d", post_id, attempt + 1)
+                logger.warning("Failed to download post %s on attempt %d", post_id, attempt + 1)
             else:
                 return
         logger.exception("All attempts to download post %s have failed", post_id)
