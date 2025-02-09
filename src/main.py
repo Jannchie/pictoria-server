@@ -4,7 +4,7 @@ import pathlib
 import shutil
 import tomllib
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 import fastapi
 import httpx
@@ -142,12 +142,14 @@ def get_post_by_id(post_id: int, session: Session):
     return post
 
 
-class PostFilter(BaseModel):
+class ListPostBody(BaseModel):
     rating: list[int] | None = []
     score: list[int] | None = []
     tags: list[str] | None = []
     extension: list[str] | None = []
     folder: str | None = None
+    order_by: Literal["id", "score", "rating", "created_at", "file_name"] = "id"
+    order: Literal["asc", "desc"] = "desc"
 
 
 @app.post(
@@ -159,11 +161,11 @@ def v1_list_posts(
     *,
     limit: int | None = None,
     offset: int = 0,
-    filter: PostFilter = PostFilter(),  # noqa: A002
+    body: ListPostBody = ListPostBody(),
     ascending: bool = False,
 ):
     session = get_session()
-    stmt = apply_filtered_query(filter, select(Post)).order_by(Post.id.asc() if ascending else Post.id.desc()).limit(limit).offset(offset)
+    stmt = apply_body_query(body, select(Post)).order_by(Post.id.asc() if ascending else Post.id.desc()).limit(limit).offset(offset)
     return session.scalars(stmt)
 
 
@@ -177,7 +179,7 @@ def v1_delete_post(post_id: int):
     session.commit()
 
 
-def apply_filtered_query(filter: PostFilter, stmt: Select) -> Select:  # noqa: A002
+def apply_body_query(filter: ListPostBody, stmt: Select) -> Select:  # noqa: A002
     if filter.rating:
         stmt = stmt.filter(Post.rating.in_(filter.rating))
     if filter.score:
@@ -186,8 +188,10 @@ def apply_filtered_query(filter: PostFilter, stmt: Select) -> Select:  # noqa: A
         stmt = stmt.join(Post.tags).filter(PostHasTag.tag_name.in_(filter.tags))
     if filter.extension:
         stmt = stmt.filter(Post.extension.in_(filter.extension))
-    if filter.folder and filter.folder != "":
+    if filter.folder and filter.folder != ".":
         stmt = stmt.filter(Post.file_path == filter.folder)
+    if filter.order_by:
+        stmt = stmt.order_by(getattr(Post, filter.order_by).asc()) if filter.order == "asc" else stmt.order_by(getattr(Post, filter.order_by).desc())
     return stmt
 
 
@@ -209,11 +213,11 @@ class RatingCountResponse(BaseModel):
 
 @app.post("/v1/posts/count/rating", response_model=list[RatingCountResponse], tags=["Post"])
 def v1_count_group_by_rating(
-    filter: PostFilter = Body(...),  # noqa: A002
+    body: ListPostBody = Body(...),
     session: Session = Depends(get_session),
 ):
     stmt = select(Post.rating, func.count()).group_by(Post.rating)
-    stmt = apply_filtered_query(filter, stmt)
+    stmt = apply_body_query(body, stmt)
     resp = session.execute(stmt).all()
     return [RatingCountResponse(rating=row[0], count=row[1]) for row in resp]
 
@@ -226,9 +230,9 @@ class ScoreCountResponse(BaseModel):
 @app.post("/v1/posts/count/score", response_model=list[ScoreCountResponse], tags=["Post"])
 def v1_count_group_by_score(
     session: Annotated[Session, Depends(get_session)],
-    filter: Annotated[PostFilter, Body(...)],  # noqa: A002
+    body: Annotated[ListPostBody, Body(...)],
 ):
-    query = apply_filtered_query(filter, select(Post.score, func.count()).group_by(Post.score))
+    query = apply_body_query(body, select(Post.score, func.count()).group_by(Post.score))
     resp = session.execute(query).all()
     return [ScoreCountResponse(score=row[0] if row[0] is not None else 0, count=row[1]) for row in resp]
 
@@ -241,10 +245,10 @@ class ExtensionCountResponse(BaseModel):
 @app.post("/v1/posts/count/extension", response_model=list[ExtensionCountResponse], tags=["Post"])
 def v1_count_group_by_extension(
     session: Annotated[Session, Depends(get_session)],
-    filter: Annotated[PostFilter, Body(...)],  # noqa: A002
+    body: Annotated[ListPostBody, Body(...)],
 ):
     query = select(Post.extension, func.count()).group_by(Post.extension)
-    query = apply_filtered_query(filter, query)
+    query = apply_body_query(body, query)
     resp = session.execute(query).all()
     return [ExtensionCountResponse(extension=row[0], count=row[1]) for row in resp]
 
